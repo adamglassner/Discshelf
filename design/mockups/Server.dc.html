@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Discshelf Server dashboard</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#141210}
+a{color:#F0A93B}a:hover{color:#FFC768}
+button{font:inherit;color:inherit}
+</style>
+</helmet>
+<div style="min-height: 900px; background: #141210; color: #F2EDE4; font-family: 'IBM Plex Sans', sans-serif; display: flex; flex-wrap: wrap">
+
+  <nav aria-label="Server admin" style="flex: 0 0 240px; box-sizing: border-box; padding: 28px 20px; background: #1A1714; border-right: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 24px">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="13" cy="13" r="10" stroke="#F0A93B" stroke-width="2"></circle><circle cx="13" cy="13" r="3" fill="#F0A93B"></circle><path d="M3 28h26" stroke="#F2EDE4" stroke-width="2" stroke-linecap="round"></path><path d="M26 6v19" stroke="#F2EDE4" stroke-width="2" stroke-linecap="round"></path></svg>
+        <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -0.02em">Discshelf</span>
+      </div>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #A89F92; padding-left: 40px">SERVER · v0.1.0</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; background: #2A251F; color: #F2EDE4; text-decoration: none; font-weight: 600">Overview</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Music folders</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Metadata &amp; artwork</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Users</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Devices</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Transcoding</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Remote access</a>
+      <a href="#" style="display: block; padding: 10px 12px; border-radius: 8px; color: #D6CFC4; text-decoration: none">Logs</a>
+    </div>
+    <div style="margin-top: auto; font-size: 12px; color: #A89F92; line-height: 1.6">
+      Running on <span style="color: #D6CFC4">[YOUR SERVER NAME]</span><br>
+      Docker · port 4533
+    </div>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 40px; display: flex; flex-direction: column; gap: 28px">
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+      <div>
+        <h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 34px; font-weight: 700; letter-spacing: -0.02em">Overview</h1>
+        <div style="color: #A89F92; font-size: 14px; margin-top: 6px; display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #7CC08A"></span>Server healthy · up 12 days</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" style="height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid #2E2A25; background: transparent; cursor: pointer">Open web player</button>
+        <button type="button" style="height: 40px; padding: 0 16px; border-radius: 8px; border: 0; background: #F0A93B; color: #1A1408; font-weight: 600; cursor: pointer">Scan library now</button>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px">
+      <sc-for list="{{stats}}" as="s" hint-placeholder-count="4">
+        <div style="padding: 20px; border-radius: 12px; background: #1D1A17; border: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 8px">
+          <div style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #A89F92">{{s.label}}</div>
+          <div style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 32px; font-weight: 700">{{s.value}}</div>
+          <div style="font-size: 13px; color: #A89F92">{{s.sub}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 24px">
+      <section style="flex: 3 1 460px; min-width: 0; padding: 24px; border-radius: 12px; background: #1D1A17; border: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600">Music folders</h2>
+          <a href="#" style="font-size: 13px">+ Add folder</a>
+        </div>
+        <sc-for list="{{folders}}" as="f" hint-placeholder-count="3">
+          <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px 0; border-top: 1px solid #2E2A25">
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{f.path}}</span>
+              <span style="font-size: 13px; color: #A89F92">{{f.count}}</span>
+            </div>
+            <div style="height: 6px; border-radius: 3px; background: #2E2A25"><div style="{{f.barStyle}}"></div></div>
+            <div style="font-size: 12px; color: #A89F92">{{f.status}}</div>
+          </div>
+        </sc-for>
+      </section>
+
+      <section style="flex: 2 1 320px; min-width: 0; padding: 24px; border-radius: 12px; background: #1D1A17; border: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 12px">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600">Now streaming</h2>
+        <sc-for list="{{sessions}}" as="x" hint-placeholder-count="3">
+          <div style="display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid #2E2A25">
+            <div style="{{x.thumbStyle}}"></div>
+            <div style="flex: 1; min-width: 0">
+              <div style="font-size: 14px; font-weight: 500">{{x.track}}</div>
+              <div style="font-size: 12px; color: #A89F92">{{x.who}} · {{x.device}}</div>
+            </div>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #A89F92; border: 1px solid #2E2A25; border-radius: 4px; padding: 3px 6px; white-space: nowrap">{{x.mode}}</span>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 24px">
+      <section style="flex: 3 1 460px; min-width: 0; padding: 24px; border-radius: 12px; background: #1D1A17; border: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600">Users</h2>
+          <a href="#" style="font-size: 13px">+ Invite user</a>
+        </div>
+        <div style="overflow-x: auto">
+          <div style="min-width: 420px">
+            <sc-for list="{{users}}" as="u" hint-placeholder-count="3">
+              <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 0; border-top: 1px solid #2E2A25; font-size: 14px; align-items: center">
+                <span style="font-weight: 500">{{u.name}}</span>
+                <span style="color: #A89F92">{{u.role}}</span>
+                <span style="color: #A89F92">{{u.seen}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+
+      <section style="flex: 2 1 320px; min-width: 0; padding: 24px; border-radius: 12px; background: #1D1A17; border: 1px solid #2E2A25; display: flex; flex-direction: column; gap: 16px">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600">Transcoding</h2>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A89F92">Mobile on cellular
+          <select style="height: 44px; border-radius: 8px; background: #141210; color: #F2EDE4; border: 1px solid #2E2A25; padding: 0 10px; font: inherit; font-size: 14px"><option>Opus 128 kbps</option><option>Opus 192 kbps</option><option>Original</option></select>
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #A89F92">Mobile on Wi-Fi
+          <select style="height: 44px; border-radius: 8px; background: #141210; color: #F2EDE4; border: 1px solid #2E2A25; padding: 0 10px; font: inherit; font-size: 14px"><option>Original (direct play)</option><option>Opus 192 kbps</option></select>
+        </label>
+        <label style="display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px">Allow offline downloads
+          <input type="checkbox" checked style="width: 22px; height: 22px; accent-color: #F0A93B">
+        </label>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const stats = [
+      { label: 'Tracks', value: '18,402', sub: '1,512 albums · 640 artists' },
+      { label: 'Storage', value: '612 GB', sub: 'of 2 TB on /music' },
+      { label: 'Streaming', value: '3', sub: 'active sessions' },
+      { label: 'Last scan', value: '2h ago', sub: '24 new tracks found' }
+    ];
+    const folders = [
+      { path: '/music/flac', count: '12,880 tracks', pct: 100, status: 'Up to date · watching for changes' },
+      { path: '/music/mp3', count: '5,104 tracks', pct: 100, status: 'Up to date · watching for changes' },
+      { path: '/mnt/nas/new-rips', count: '418 tracks', pct: 62, status: 'Scanning… reading tags and artwork' }
+    ].map(f => ({ ...f, barStyle: `width: ${f.pct}%; height: 100%; border-radius: 3px; background: ${f.pct < 100 ? '#F0A93B' : '#7CC08A'}` }));
+    const sessions = [
+      { track: 'Last Stop, Maple Ave', who: 'Adam', device: 'Windows desktop', mode: 'FLAC direct', bg: '#283353' },
+      { track: 'Orbit Song', who: 'Guest', device: 'iPhone', mode: 'Opus 128', bg: '#3D7A9E' },
+      { track: 'Kindling', who: 'Adam', device: 'Android', mode: 'Offline sync', bg: '#4A3B33' }
+    ].map(s => ({ ...s, thumbStyle: `width: 40px; height: 40px; border-radius: 4px; flex: 0 0 auto; background: ${s.bg}` }));
+    const users = [
+      { name: 'Adam', role: 'Admin', seen: 'Online now' },
+      { name: 'Guest', role: 'Listener', seen: 'Online now' },
+      { name: '[FAMILY MEMBER]', role: 'Listener', seen: '3 days ago' }
+    ];
+    return { stats, folders, sessions, users };
+  }
+}
+</script>
+</body>
+</html>
