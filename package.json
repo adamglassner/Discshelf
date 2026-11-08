@@ -1,0 +1,65 @@
+{
+  "name": "discshelf",
+  "productName": "Discshelf",
+  "version": "0.1.0",
+  "description": "Discshelf — a music player for the music on your computer",
+  "author": "Bytehawk Studio",
+  "license": "UNLICENSED",
+  "private": true,
+  "homepage": "https://github.com/adamglassner/discshelf",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/tags.test.js && node test/library.test.js",
+    "dist": "electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.bytehawkstudio.discshelf",
+    "productName": "Discshelf",
+    "copyright": "© 2026 Bytehawk Studio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "executableName": "Discshelf",
+      "artifactName": "Discshelf-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Discshelf",
+      "uninstallDisplayName": "Discshelf",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Discshelf-${version}-Setup.${ext}"
+    },
+    "publish": null
+  }
+}

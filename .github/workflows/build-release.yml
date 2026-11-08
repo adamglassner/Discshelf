@@ -1,0 +1,109 @@
+name: Build, test and release
+
+# - Every push / pull request: run the tests, build the Windows installer and portable zip,
+#   then install and start them the same way the Bytehawk Studio Launcher does.
+# - Push to main with a "version" in package.json that has no release yet (or push a tag like v0.2.0):
+#   the same, then publish GitHub Release v<version> with Discshelf-<version>-Setup.exe and
+#   Discshelf-<version>-win-x64.zip. The launcher installs and updates Discshelf from these releases.
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Work out version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $release = 'false'
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $v = $env:GITHUB_REF_NAME.Substring(1)
+            $release = 'true'
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            git fetch --tags --quiet
+            if (-not (git tag -l "v$v")) { $release = 'true' }
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "release=$release" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $v, release: $release"
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Tests
+        run: npm test
+
+      - name: Build installer and portable zip
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Install and start the build like the launcher does
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $setup = "dist/Discshelf-$v-Setup.exe"
+          $zip = "dist/Discshelf-$v-win-x64.zip"
+          foreach ($f in @($setup, $zip)) { if (-not (Test-Path $f)) { throw "missing $f" } }
+
+          # Portable zip: unpack and start it (the app exits by itself after checking its window loaded).
+          $z = Join-Path $env:RUNNER_TEMP 'zip'
+          Expand-Archive $zip -DestinationPath $z -Force
+          $exe = Get-ChildItem $z -Recurse -Filter Discshelf.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Discshelf.exe is not in the zip' }
+          $p = Start-Process $exe.FullName -ArgumentList '--smoke-test', "--data-dir=$env:RUNNER_TEMP\data-zip" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "portable build did not start (exit code $($p.ExitCode))" }
+          Write-Host 'Portable zip: OK'
+
+          # Installer: silent per-user install into a folder (as the launcher runs it), start, uninstall.
+          $dir = Join-Path $env:RUNNER_TEMP 'installed'
+          $p = Start-Process (Resolve-Path $setup) -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "silent install failed (exit code $($p.ExitCode))" }
+          if (-not (Test-Path "$dir\Discshelf.exe")) { throw 'Discshelf.exe was not installed' }
+          $p = Start-Process "$dir\Discshelf.exe" -ArgumentList '--smoke-test', "--data-dir=$env:RUNNER_TEMP\data-setup" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installed build did not start (exit code $($p.ExitCode))" }
+          $un = Get-ChildItem $dir -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if ($un) { $p = Start-Process $un.FullName -ArgumentList '/S' -Wait -PassThru; Write-Host "Uninstall exit code $($p.ExitCode)" }
+          Write-Host 'Installer: OK'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Discshelf-${{ steps.ver.outputs.version }}-windows
+          path: |
+            dist/Discshelf-*-Setup.exe
+            dist/Discshelf-*-win-x64.zip
+
+      - name: Publish release
+        if: steps.ver.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Discshelf ${{ steps.ver.outputs.version }}
+          make_latest: true
+          body: |
+            **Windows 10/11**
+            - `Discshelf-${{ steps.ver.outputs.version }}-Setup.exe`: installer (per-user, no admin rights needed)
+            - `Discshelf-${{ steps.ver.outputs.version }}-win-x64.zip`: portable, unzip and run `Discshelf.exe`
+
+            Also available in the Bytehawk Studio Launcher, which installs it and keeps it up to date.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what's new.
+          files: |
+            dist/Discshelf-*-Setup.exe
+            dist/Discshelf-*-win-x64.zip
