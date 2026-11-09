@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' discshelf: data:; media-src discshelf:; connect-src 'self' discshelf:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' discshelf: data: https:; media-src discshelf:; connect-src 'self' discshelf:">
 <title>Discshelf</title>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -44,6 +44,7 @@
     <div class="player-right">
       <button type="button" class="ibtn toggle" id="btn-shuffle" aria-label="Shuffle" aria-pressed="false" title="Shuffle"></button>
       <button type="button" class="ibtn toggle" id="btn-repeat" aria-label="Repeat: off" aria-pressed="false" title="Repeat: off"></button>
+      <button type="button" class="ibtn toggle" id="btn-eq" aria-label="Equalizer" aria-pressed="false" title="Equalizer"></button>
       <div class="volume">
         <button type="button" class="ibtn" id="btn-mute" aria-label="Mute" title="Mute"></button>
         <input type="range" id="volume" min="0" max="100" value="80" aria-label="Volume">
@@ -70,6 +71,7 @@
         <div id="folder-list" role="list"></div>
       </div>
       <div class="side-actions">
+        <button type="button" class="side-item" id="btn-settings"></button>
         <button type="button" class="btn primary" id="btn-add-music"></button>
       </div>
     </aside>
@@ -91,6 +93,25 @@
           <div class="tl-message" id="tl-message" hidden></div>
         </div>
       </div>
+
+      <div id="albums-view" hidden tabindex="-1">
+        <div id="al-grid-page">
+          <section class="al-section" id="al-recent" hidden>
+            <div class="al-section-head"><h2>Recently Added</h2><button type="button" class="linkbtn" id="al-recent-more">Show more</button></div>
+            <div class="al-grid one-row" id="al-recent-grid"></div>
+          </section>
+          <section class="al-section">
+            <div class="al-section-head"><h2 id="al-all-title">All Albums</h2>
+              <label class="al-sort">Sort by
+                <select id="al-sort"><option value="artist">Artist</option><option value="title">Album</option><option value="year">Year</option><option value="added">Recently added</option></select>
+              </label></div>
+            <div class="al-grid" id="al-all-grid"></div>
+          </section>
+        </div>
+        <div id="al-detail" hidden></div>
+      </div>
+
+      <div id="settings-view" hidden tabindex="-1"></div>
 
       <div id="empty" hidden>
         <div class="empty-card">
@@ -139,6 +160,10 @@
 <div id="modal-root"></div>
 <div id="toasts" aria-live="polite"></div>
 <script src="icons.js"></script>
+<script src="albums.js"></script>
+<script src="eq.js"></script>
+<script src="info.js"></script>
+<script src="settings.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

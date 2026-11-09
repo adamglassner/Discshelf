@@ -41,6 +41,7 @@
 
   const audio = new Audio();
   audio.preload = 'auto';
+  audio.crossOrigin = 'anonymous'; // lets the equalizer (Web Audio) process the sound
 
   // ---------------------------------------------------------------- helpers
 
@@ -112,11 +113,18 @@
   // ---------------------------------------------------------------- theme
 
   function applyTheme() {
-    const t = state.settings.theme || 'system';
-    const resolved = t === 'system' ? (state.systemDark ? 'dark' : 'light') : t;
-    document.documentElement.dataset.theme = resolved;
+    const s = state.settings;
+    const dark = s.theme === 'dark' || (s.theme !== 'light' && state.systemDark);
+    const style = s.style === 'classic' ? 'classic' : 'modern';
+    document.documentElement.dataset.style = style;
+    document.documentElement.dataset.theme = style === 'classic' ? (dark ? 'classic-dark' : 'classic-light') : (dark ? 'dark' : 'light');
     const cs = getComputedStyle(document.documentElement);
     api.setTitleBar({ color: cs.getPropertyValue('--titlebar-bg').trim(), symbolColor: cs.getPropertyValue('--titlebar-fg').trim() });
+  }
+
+  function setAppearance(patch) {
+    saveSettings(patch);
+    applyTheme();
   }
 
   // ---------------------------------------------------------------- library data
@@ -133,12 +141,19 @@
     for (const id of [...state.selected]) if (!state.byId.has(id)) state.selected.delete(id);
     if (state.current) {
       const fresh = state.byId.get(state.current.id);
-      if (fresh) state.current = fresh;
+      if (fresh) {
+        const changed = ['art', 'title', 'artist', 'album'].some((k) => fresh[k] !== state.current[k]);
+        state.current = fresh;
+        if (changed) setTimeout(updateNowPlaying, 0); // e.g. new artwork from Get Info
+      }
     }
     if (state.view.startsWith('folder:') && !state.folders.includes(state.view.slice(7))) state.view = 'music';
+    mods.albums.invalidate();
     renderSidebar();
     recompute();
     $('#empty').hidden = state.tracks.length > 0;
+    if (state.view === 'albums') mods.albums.render();
+    if (state.view === 'settings') mods.settings.render();
   }
 
   async function reloadLibrary() {
@@ -148,7 +163,8 @@
   // ---------------------------------------------------------------- sidebar
 
   const VIEWS = [
-    { id: 'music', label: 'Music', icon: 'music' },
+    { id: 'music', label: 'Songs', icon: 'music' },
+    { id: 'albums', label: 'Albums', icon: 'albums' },
     { id: 'recent', label: 'Recently added', icon: 'recent' },
     { id: 'top', label: 'Most played', icon: 'top' },
   ];
@@ -168,7 +184,7 @@
 
   function renderSidebar() {
     $('#views').innerHTML = VIEWS.map((v) => {
-      const count = viewTracks(v.id).length;
+      const count = v.id === 'albums' ? mods.albums.all().length : viewTracks(v.id).length;
       return `<button type="button" class="side-item${state.view === v.id ? ' active' : ''}" data-view="${v.id}" role="listitem">
         ${I[v.icon]}<span class="label">${esc(v.label)}</span><span class="count">${count ? n(count) : ''}</span></button>`;
     }).join('');
@@ -180,17 +196,37 @@
           ${I.folder}<span class="label">${esc(folderName(f))}</span><span class="count">${n(count)}</span></button>`;
       }).join('')
       : '<div class="side-empty">No folders yet</div>';
+    $('#btn-settings').classList.toggle('active', state.view === 'settings');
   }
 
   function setView(view) {
-    if (state.view === view) return;
+    if (state.view === view) {
+      if (view === 'albums' && mods.albums.isDetailOpen()) mods.albums.back();
+      return;
+    }
+    const wasSongs = isSongView(state.view);
     state.view = view;
-    state.filter = { genre: null, artist: null, album: null };
-    state.selected.clear();
-    state.anchor = -1;
+    if (isSongView(view) || !wasSongs) {
+      state.filter = { genre: null, artist: null, album: null };
+      state.selected.clear();
+      state.anchor = -1;
+    }
+    updateMode();
     renderSidebar();
     recompute();
     $('#tl-scroll').scrollTop = 0;
+  }
+
+  const isSongView = (v) => v !== 'albums' && v !== 'settings';
+
+  /** Shows the songs list, the albums grid or the settings page in the content area. */
+  function updateMode() {
+    const mode = state.view === 'albums' ? 'albums' : state.view === 'settings' ? 'settings' : 'songs';
+    $('#content').dataset.mode = mode;
+    $('#albums-view').hidden = mode !== 'albums';
+    $('#settings-view').hidden = mode !== 'settings';
+    if (mode === 'albums') mods.albums.render();
+    if (mode === 'settings') { mods.settings.render(); $('#settings-view').scrollTop = 0; }
   }
 
   // ---------------------------------------------------------------- filtering + sorting
@@ -209,7 +245,7 @@
     return collator.compare(a, b);
   }
 
-  const albumOrder = (a, b) => (a.discNo || 0) - (b.discNo || 0) || (a.trackNo || 0) - (b.trackNo || 0) || cmpText(a.title, b.title);
+  const albumOrder = (a, b) => (a.discNo || 1) - (b.discNo || 1) || (a.trackNo || 0) - (b.trackNo || 0) || cmpText(a.title, b.title);
   const SORTERS = {
     title: (a, b) => cmpText(a.title, b.title) || cmpText(sortName(a.artist), sortName(b.artist)),
     artist: (a, b) => cmpText(sortName(a.albumArtist || a.artist), sortName(b.albumArtist || b.artist)) || cmpText(a.album, b.album) || albumOrder(a, b),
@@ -529,6 +565,8 @@
   function renderStatus() {
     const rows = state.rows;
     if (!state.tracks.length) { $('#status-text').textContent = 'Your library is empty'; return; }
+    if (state.view === 'albums') { $('#status-text').textContent = mods.albums.status(); return; }
+    if (state.view === 'settings') { $('#status-text').textContent = `${plural(state.tracks.length, 'song', 'songs')} in your library`; return; }
     let dur = 0; let size = 0;
     for (const t of rows) { dur += t.duration || 0; size += t.size || 0; }
     let text = `${plural(rows.length, 'song', 'songs')}, ${fmtTotal(dur)}, ${fmtSize(size)}`;
@@ -539,12 +577,12 @@
 
   const placeholderArt = () => I.disc;
 
-  function renderArtPane() {
+  function renderArtPane(selectedId) {
     if (!state.settings.showArtPane) return;
     let t = null;
     if (state.artMode === 'playing') t = state.current;
     else {
-      const ids = selectedIds();
+      const ids = selectedId ? [selectedId] : state.view === 'albums' ? mods.albums.selectedIds() : selectedIds();
       t = ids.length ? state.byId.get(ids[ids.length - 1]) : null;
     }
     const frame = $('#art-frame');
@@ -606,6 +644,18 @@
     loadAndPlay(state.byId.get(state.queue[i]));
   }
 
+  /** Plays a list of song ids from position `start` (-1 = random start). shuffle: force a shuffled order. */
+  function playQueue(ids, start = 0, { shuffle = false } = {}) {
+    state.queue = ids.filter((id) => state.byId.has(id));
+    if (!state.queue.length) return;
+    if (start < 0) start = Math.floor(Math.random() * state.queue.length);
+    start = Math.min(start, state.queue.length - 1);
+    state.order = shuffle || state.settings.shuffle ? shuffledOrder(state.queue.length, start) : [...Array(state.queue.length).keys()];
+    state.pos = state.order.indexOf(start);
+    state.errorsInARow = 0;
+    loadAndPlay(state.byId.get(state.queue[start]));
+  }
+
   function playIds(ids) {
     const list = ids.map((id) => state.byId.get(id)).filter(Boolean);
     if (!list.length) return;
@@ -619,6 +669,7 @@
     if (!t) return;
     state.current = t;
     state.counted = false;
+    state.play = { id: t.id, startedAt: 0, listened: 0, lastPos: at || 0, scrobbled: false };
     audio.src = `discshelf://media/${encodeURIComponent(t.id)}`;
     if (at > 0) {
       const seekOnce = () => { try { audio.currentTime = at; } catch { /* ignore */ } };
@@ -719,6 +770,7 @@
     updatePlayButton();
     updateTime();
     updateRowStates();
+    mods.albums.updatePlaying();
     if (state.artMode === 'playing') renderArtPane();
 
     if ('mediaSession' in navigator) {
@@ -756,13 +808,37 @@
     });
   }
 
+  /** Adds up how long the current song has actually been heard (not skipped over) and scrobbles it
+   *  to Last.fm once that passes half the song or 4 minutes. */
+  function trackListening() {
+    const p = state.play;
+    if (!p || audio.paused || !state.current || p.id !== state.current.id) return;
+    const pos = audio.currentTime;
+    const d = pos - p.lastPos;
+    if (d > 0 && d < 1.5) p.listened += d;
+    p.lastPos = pos;
+    const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : state.current.duration;
+    if (!p.scrobbled && p.startedAt && dur > 30 && p.listened >= Math.min(dur / 2, 240)) {
+      p.scrobbled = true;
+      api.lastfmScrobble(p.id, p.startedAt);
+    }
+  }
+
   let lastPositionSave = 0;
   function setupAudio() {
-    audio.addEventListener('play', () => { updatePlayButton(); updateRowStates(); });
-    audio.addEventListener('pause', () => { updatePlayButton(); updateRowStates(); saveSettings({ lastPosition: audio.currentTime || 0 }); });
-    audio.addEventListener('playing', () => { state.errorsInARow = 0; });
+    audio.addEventListener('play', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); });
+    audio.addEventListener('pause', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); saveSettings({ lastPosition: audio.currentTime || 0 }); });
+    audio.addEventListener('playing', () => {
+      state.errorsInARow = 0;
+      const p = state.play;
+      if (p && !p.startedAt && state.current && p.id === state.current.id) {
+        p.startedAt = Date.now();
+        api.lastfmNowPlaying(p.id);
+      }
+    });
     audio.addEventListener('timeupdate', () => {
       updateTime();
+      trackListening();
       const d = audio.duration;
       if (!state.counted && Number.isFinite(d) && d > 0 && audio.currentTime >= Math.min(d * 0.5, 240)) countPlay();
       const now = Date.now();
@@ -771,7 +847,10 @@
     audio.addEventListener('durationchange', updateTime);
     audio.addEventListener('ended', () => {
       countPlay();
-      if (state.settings.repeat === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); state.counted = false; return; }
+      if (state.settings.repeat === 'one') {
+        state.play = { id: state.current.id, startedAt: 0, listened: 0, lastPos: 0, scrobbled: false };
+        audio.currentTime = 0; audio.play().catch(() => {}); state.counted = false; return;
+      }
       advance(1, { fromEnded: true });
     });
     audio.addEventListener('error', () => {
@@ -869,7 +948,7 @@
 
   // ---------------------------------------------------------------- dialogs
 
-  function modal(html, { onMount } = {}) {
+  function modal(html, { onMount, sticky = false } = {}) {
     return new Promise((resolve) => {
       const root = $('#modal-root');
       const backdrop = document.createElement('div');
@@ -879,7 +958,7 @@
       const close = (value) => { backdrop.remove(); document.removeEventListener('keydown', onKey, true); resolve(value); };
       const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
       document.addEventListener('keydown', onKey, true);
-      backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(null); });
+      if (!sticky) backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(null); });
       backdrop.addEventListener('click', (e) => {
         const b = e.target.closest('[data-result]');
         if (b) close(b.dataset.result);
@@ -1042,7 +1121,14 @@
 
   function runCommand({ name, arg }) {
     switch (name) {
-      case 'theme': state.settings.theme = arg; applyTheme(); break;
+      case 'appearance': Object.assign(state.settings, arg); applyTheme(); if (state.view === 'settings') mods.settings.render(); break;
+      case 'view': setView(arg); break;
+      case 'settings': setView('settings'); break;
+      case 'equalizer': mods.eq.open(); break;
+      case 'getInfo': getInfo(arg); break;
+      case 'goToAlbum': mods.albums.openForTrack(arg); break;
+      case 'shuffleIds': playQueue(arg, -1, { shuffle: true }); break;
+      case 'findMissingArt': findMissingArt(); break;
       case 'showFilters': saveSettings({ showFilters: arg }); applyLayout(); break;
       case 'showArtPane': saveSettings({ showArtPane: arg }); applyLayout(); renderArtPane(); break;
       case 'focusSearch': $('#search').focus(); $('#search').select(); break;
@@ -1052,7 +1138,7 @@
       case 'prev': prev(); break;
       case 'toggleShuffle': toggleShuffle(); break;
       case 'repeat': setRepeat(arg); break;
-      case 'manageFolders': manageFolders(); break;
+      case 'manageFolders': setView('settings'); break;
       case 'about': about(); break;
       case 'shortcuts': shortcuts(); break;
       case 'playIds': playIds(arg); break;
@@ -1070,7 +1156,14 @@
       if (ctrl && e.key.toLowerCase() === 'l') { e.preventDefault(); revealPlaying(); return; }
       if (ctrl && e.key.toLowerCase() === 'o') { e.preventDefault(); if (e.shiftKey) addFiles(); else addFolder(); return; }
       if (e.key === 'F5') { e.preventDefault(); api.rescan(); return; }
+      if (ctrl && e.key === ',') { e.preventDefault(); setView('settings'); return; }
       if (inInput) return;
+      if (ctrl && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        const ids = state.view === 'albums' ? mods.albums.selectedIds() : selectedIds();
+        if (ids.length) getInfo(ids); else if (state.current) getInfo([state.current.id]);
+        return;
+      }
       if (ctrl && e.key === 'ArrowRight') { e.preventDefault(); next(); return; }
       if (ctrl && e.key === 'ArrowLeft') { e.preventDefault(); prev(); return; }
       if (ctrl && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -1090,12 +1183,14 @@
       t = setTimeout(() => {
         state.search = search.value.trim();
         state.selected.clear();
+        if (state.view === 'settings') setView('music');
         recompute({ keepScroll: false });
+        if (state.view === 'albums') { if (mods.albums.isDetailOpen()) mods.albums.back(); else mods.albums.render(); }
       }, 120);
     });
     search.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { search.value = ''; search.dispatchEvent(new Event('input')); search.blur(); }
-      if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); state.search = search.value.trim(); recompute({ keepScroll: false }); playRows(0); }
+      if (e.key === 'Enter' && state.view !== 'albums') { e.preventDefault(); clearTimeout(t); state.search = search.value.trim(); recompute({ keepScroll: false }); playRows(0); }
       if (e.key === 'ArrowDown') { e.preventDefault(); $('#tracklist').focus(); if (state.rows.length) selectIndex(0); }
     });
   }
@@ -1118,7 +1213,11 @@
 
     $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
     $('#folder-list').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
-    $('#btn-manage-folders').addEventListener('click', manageFolders);
+    $('#btn-manage-folders').addEventListener('click', () => setView('settings'));
+    $('#btn-settings').innerHTML = `${I.gear}<span class="label">Settings</span>`;
+    $('#btn-settings').addEventListener('click', () => setView('settings'));
+    $('#btn-eq').innerHTML = I.eq;
+    $('#btn-eq').addEventListener('click', () => mods.eq.open());
     $('#btn-add-music').addEventListener('click', addFolder);
     $('#empty-add-folder').addEventListener('click', addFolder);
     $('#empty-add-files').addEventListener('click', addFiles);
@@ -1147,6 +1246,42 @@
     });
   }
 
+  // ---------------------------------------------------------------- modules (albums, equalizer, get info, settings)
+
+  const mods = {};
+  const ctx = {
+    api, I, $, $$, esc, fold, n, plural, fmtTime, fmtTotal, fmtSize, artUrl, formatLine, toast, modal, collator, sortName,
+    isInside, state, audio, saveSettings, setAppearance, setView, playQueue, reloadLibrary, renderStatus, renderArtPane,
+    shortcuts, getInfo: (ids) => getInfo(ids), findMissingArt: () => findMissingArt(),
+    onEqChange: () => { updateEqButton(); mods.settings.refreshEq(); },
+  };
+
+  function getInfo(ids) {
+    if (ids && ids.length) mods.info.open(ids);
+  }
+
+  function updateEqButton() {
+    const b = $('#btn-eq');
+    const on = !!(state.settings.eq && state.settings.eq.enabled);
+    b.setAttribute('aria-pressed', String(on));
+    b.title = `Equalizer: ${mods.eq.summary()}`;
+  }
+
+  async function findMissingArt() {
+    if (!state.settings.onlineLookup) {
+      toast('Online lookups are turned off. Turn them on in Settings → Song info & artwork.');
+      return;
+    }
+    const missing = mods.albums.all().filter((a) => !a.artTrack && a.title).length;
+    if (!missing) { toast('Every album already has artwork.'); return; }
+    const r = await modal(`<h2>Find missing album artwork?</h2>
+      <p>Discshelf will search iTunes and Deezer for ${plural(missing, 'album', 'albums')} without artwork and add any covers it finds. This takes about ${Math.max(1, Math.round((missing * 3.5) / 60))} min; you can keep listening meanwhile.</p>
+      <div class="actions"><button type="button" class="btn" data-result="cancel">Cancel</button><button type="button" class="btn primary" data-result="ok" data-autofocus>Find artwork</button></div>`);
+    if (r !== 'ok') return;
+    api.findMissingArt().catch((err) => toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error'));
+    if (state.view !== 'settings') toast('Looking for album artwork… Progress is shown in Settings.');
+  }
+
   // ---------------------------------------------------------------- start
 
   async function start() {
@@ -1155,7 +1290,17 @@
     state.settings = settings;
     state.systemDark = systemDark;
     applyTheme();
+    mods.albums = window.DSModules.albums(ctx);
+    mods.eq = window.DSModules.eq(ctx);
+    mods.info = window.DSModules.info(ctx);
+    mods.settings = window.DSModules.settings(ctx);
+    ctx.albums = mods.albums;
+    ctx.eq = mods.eq;
+    mods.eq.init();
+    updateEqButton();
     setupChrome();
+    mods.albums.setup();
+    mods.settings.setup();
     setupFilters();
     setupTrackList();
     setupAudio();
@@ -1167,7 +1312,7 @@
     setLibrary(lib);
 
     // Pick up where the user left off (paused).
-    const last = settings.lastTrackId && state.byId.get(settings.lastTrackId);
+    const last = settings.resumeOnStart !== false && settings.lastTrackId && state.byId.get(settings.lastTrackId);
     if (last) {
       const i = state.rowIndex.get(last.id);
       state.queue = state.rows.map((t) => t.id);
@@ -1182,7 +1327,9 @@
     api.onScanProgress(onScanProgress);
     api.onLibraryChanged(() => reloadLibrary());
     api.onSystemTheme((dark) => { state.systemDark = dark; applyTheme(); });
+    updateMode();
     window.__discshelfReady = true;
+    window.__discshelfTest = { level: () => mods.eq.level(), state };
   }
 
   start().catch((err) => {

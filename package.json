@@ -1,7 +1,7 @@
 {
   "name": "discshelf",
   "productName": "Discshelf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Discshelf — a music player for the music on your computer",
   "author": "Bytehawk Studio",
   "license": "UNLICENSED",
@@ -10,7 +10,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/tags.test.js && node test/library.test.js",
+    "test": "node test/tags.test.js && node test/library.test.js && node test/online.test.js && node test/lastfm.test.js",
     "dist": "electron-builder --win --x64 --publish never"
   },
   "devDependencies": {

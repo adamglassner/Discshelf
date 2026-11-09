@@ -1,11 +1,13 @@
 'use strict';
 // Discshelf main process: window, menus, the discshelf:// protocol for audio and artwork, and IPC.
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, protocol, nativeTheme, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, protocol, nativeTheme, screen, net, clipboard, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
 const { Library } = require('./library');
 const { AUDIO_EXTENSIONS } = require('./tags');
+const { Online, sniffImage } = require('./online');
+const { Lastfm } = require('./lastfm');
 
 const SMOKE_TEST = process.argv.includes('--smoke-test');
 const APP_ID = 'com.bytehawkstudio.discshelf';
@@ -17,7 +19,7 @@ if (dataDirArg) app.setPath('userData', path.resolve(dataDirArg.slice('--data-di
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'discshelf', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: 'discshelf', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 if (!SMOKE_TEST && !app.requestSingleInstanceLock()) {
@@ -28,11 +30,61 @@ let win = null;
 let library = null;
 let settings = {};
 let settingsFile = '';
+const online = new Online((url, opts) => net.fetch(url, opts));
+let lastfm = null;
+
+// ------------------------------------------------------------------ Last.fm keys + session
+
+/** The app's Last.fm API key: built in by the release workflow (lastfm-key.json), from the environment,
+ *  or entered in Settings. */
+const builtInLastfmKeys = (() => {
+  try {
+    const k = JSON.parse(fs.readFileSync(path.join(__dirname, 'lastfm-key.json'), 'utf8'));
+    if (k.apiKey && k.secret) return k;
+  } catch { /* not built in */ }
+  if (process.env.DISCSHELF_LASTFM_KEY && process.env.DISCSHELF_LASTFM_SECRET) {
+    return { apiKey: process.env.DISCSHELF_LASTFM_KEY, secret: process.env.DISCSHELF_LASTFM_SECRET };
+  }
+  return null;
+})();
+
+function lastfmKeys() {
+  const own = settings.lastfmOwnKeys;
+  if (own && own.apiKey && own.secret) return own;
+  return builtInLastfmKeys;
+}
+
+function getLastfmSession() {
+  const s = settings.lastfmSession;
+  if (!s || !s.name || !s.key) return null;
+  if (!s.enc) return { name: s.name, key: s.key };
+  try { return { name: s.name, key: safeStorage.decryptString(Buffer.from(s.key, 'base64')) }; } catch { return null; }
+}
+
+function setLastfmSession(session) {
+  if (!session) settings.lastfmSession = null;
+  else if (safeStorage.isEncryptionAvailable()) {
+    settings.lastfmSession = { name: session.name, key: safeStorage.encryptString(session.key).toString('base64'), enc: true };
+  } else {
+    settings.lastfmSession = { name: session.name, key: session.key, enc: false };
+  }
+  saveSettings(true);
+}
 
 // ------------------------------------------------------------------ settings
 
+const EQ_BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const DEFAULT_SETTINGS = {
-  theme: 'system', // system | light | dark | classic
+  style: 'modern', // modern | classic (Songbird)
+  theme: 'system', // system | light | dark  (light/dark mode)
+  eq: { enabled: false, preset: 'Flat', preamp: 0, bands: EQ_BANDS.map(() => 0) },
+  rescanOnStart: true,
+  resumeOnStart: true,
+  onlineLookup: true,
+  albumSort: 'artist',
+  scrobble: true,
+  lastfmSession: null, // {name, key, enc}
+  lastfmOwnKeys: null, // {apiKey, secret} entered in Settings when this build has no key
   volume: 0.8,
   muted: false,
   shuffle: false,
@@ -56,6 +108,17 @@ function loadSettings() {
   } catch {
     settings = { ...DEFAULT_SETTINGS };
   }
+  // 0.1.0 had a single "classic" theme (dark): it's now the Classic style in dark mode.
+  if (settings.theme === 'classic') { settings.style = 'classic'; settings.theme = 'dark'; }
+  if (!['modern', 'classic'].includes(settings.style)) settings.style = 'modern';
+  if (!['system', 'light', 'dark'].includes(settings.theme)) settings.theme = 'system';
+  const eq = settings.eq || {};
+  settings.eq = {
+    enabled: !!eq.enabled,
+    preset: typeof eq.preset === 'string' ? eq.preset : 'Flat',
+    preamp: Number.isFinite(eq.preamp) ? eq.preamp : 0,
+    bands: EQ_BANDS.map((_, i) => (Array.isArray(eq.bands) && Number.isFinite(eq.bands[i]) ? eq.bands[i] : 0)),
+  };
 }
 
 let settingsTimer = null;
@@ -98,12 +161,13 @@ async function serveFile(file, request) {
         'Content-Length': String(end - start + 1),
         'Content-Range': `bytes ${start}-${end}/${st.size}`,
         'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
       },
     });
   }
   return new Response(Readable.toWeb(fs.createReadStream(file)), {
     status: 200,
-    headers: { 'Content-Type': type, 'Content-Length': String(st.size), 'Accept-Ranges': 'bytes', 'Cache-Control': 'max-age=31536000' },
+    headers: { 'Content-Type': type, 'Content-Length': String(st.size), 'Accept-Ranges': 'bytes', 'Cache-Control': 'max-age=31536000', 'Access-Control-Allow-Origin': '*' },
   });
 }
 
@@ -128,7 +192,7 @@ function registerProtocol() {
 // ------------------------------------------------------------------ window
 
 function themeIsDark() {
-  if (settings.theme === 'dark' || settings.theme === 'classic') return true;
+  if (settings.theme === 'dark') return true;
   if (settings.theme === 'light') return false;
   return nativeTheme.shouldUseDarkColors;
 }
@@ -226,24 +290,30 @@ function command(name, arg) {
 }
 
 function buildMenu(name) {
-  const t = settings.theme;
-  const themeItem = (id, label) => ({
-    label, type: 'radio', checked: t === id,
-    click: () => { settings.theme = id; saveSettings(); command('theme', id); },
+  const radio = (key, id, label) => ({
+    label, type: 'radio', checked: settings[key] === id,
+    click: () => { settings[key] = id; saveSettings(); command('appearance', { style: settings.style, theme: settings.theme }); },
   });
-  const themes = [themeItem('system', 'Follow Windows'), themeItem('light', 'Light'), themeItem('dark', 'Dark'), themeItem('classic', 'Classic (Songbird colors)')];
+  const styles = [radio('style', 'modern', 'Modern'), radio('style', 'classic', 'Classic (Songbird)')];
+  const modes = [radio('theme', 'system', 'Follow Windows'), radio('theme', 'light', 'Light'), radio('theme', 'dark', 'Dark')];
   const menus = {
-    theme: themes,
+    appearance: [...styles, { type: 'separator' }, ...modes],
     file: [
       { label: 'Add Folder to Library…', accelerator: 'CmdOrCtrl+O', click: () => addFolderDialog() },
       { label: 'Add Files to Library…', accelerator: 'CmdOrCtrl+Shift+O', click: () => addFilesDialog() },
       { label: 'Rescan Library', accelerator: 'F5', click: () => library.scan() },
-      { label: 'Manage Music Folders…', click: () => command('manageFolders') },
+      { label: 'Find Missing Album Artwork…', click: () => command('findMissingArt') },
+      { type: 'separator' },
+      { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => command('settings') },
       { type: 'separator' },
       { label: 'Exit', click: () => app.quit() },
     ],
     view: [
-      { label: 'Theme', submenu: themes },
+      { label: 'Songs', click: () => command('view', 'music') },
+      { label: 'Albums', click: () => command('view', 'albums') },
+      { type: 'separator' },
+      { label: 'Style', submenu: styles },
+      { label: 'Light / Dark', submenu: modes },
       { type: 'separator' },
       { label: 'Filter Panes (Genre, Artist, Album)', type: 'checkbox', checked: settings.showFilters, click: (i) => command('showFilters', i.checked) },
       { label: 'Album Art Pane', type: 'checkbox', checked: settings.showArtPane, click: (i) => command('showArtPane', i.checked) },
@@ -265,6 +335,8 @@ function buildMenu(name) {
           { label: 'One', type: 'radio', checked: settings.repeat === 'one', click: () => command('repeat', 'one') },
         ],
       },
+      { type: 'separator' },
+      { label: 'Equalizer…', click: () => command('equalizer') },
     ],
     help: [
       { label: 'Keyboard Shortcuts', click: () => command('shortcuts') },
@@ -343,11 +415,134 @@ function registerIpc() {
     const m = Menu.buildFromTemplate([
       { label: one ? 'Play' : `Play ${ids.length} Songs`, click: () => command('playIds', ids) },
       { type: 'separator' },
+      { label: one ? 'Get Info' : `Get Info (${ids.length} Songs)`, accelerator: 'CmdOrCtrl+I', click: () => command('getInfo', ids) },
+      { label: 'Go to Album', enabled: one, click: () => command('goToAlbum', ids[0]) },
       { label: 'Show in Explorer', enabled: one, click: () => { const t = library.get(ids[0]); if (t) shell.showItemInFolder(t.path); } },
+      { type: 'separator' },
       { label: one ? 'Remove from Library' : `Remove ${ids.length} Songs from Library`, click: () => command('confirmRemove', ids) },
     ]);
     m.popup({ window: win, x: Math.round(x), y: Math.round(y) });
   });
+  ipcMain.handle('menu:albumContext', (_e, { ids, title, x, y }) => {
+    if (!win || !Array.isArray(ids) || !ids.length) return;
+    const m = Menu.buildFromTemplate([
+      { label: 'Play Album', click: () => command('playIds', ids) },
+      { label: 'Shuffle Album', click: () => command('shuffleIds', ids) },
+      { type: 'separator' },
+      { label: 'Get Info', click: () => command('getInfo', ids) },
+      { label: 'Show in Explorer', click: () => { const t = library.get(ids[0]); if (t) shell.showItemInFolder(t.path); } },
+      { type: 'separator' },
+      { label: `Remove “${String(title || 'Album').slice(0, 40)}” from Library`, click: () => command('confirmRemove', ids) },
+    ]);
+    m.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+  });
+
+  // ---- Get Info: details + artwork
+  const toWire = (img) => (img ? { mime: img.mime, base64: img.data.toString('base64') } : null);
+  const fromWire = (img) => {
+    if (img === null) return null; // remove artwork
+    if (!img || typeof img.base64 !== 'string') return undefined; // unchanged
+    const data = Buffer.from(img.base64, 'base64');
+    const mime = sniffImage(data);
+    if (!mime) throw new Error('That isn\'t a supported image (JPEG, PNG, GIF or WebP)');
+    return { mime, data };
+  };
+  ipcMain.handle('track:save', async (_e, { ids, fields, art }) => {
+    if (!Array.isArray(ids) || !ids.length) return 0;
+    return library.updateTracks(ids, fields || {}, fromWire(art));
+  });
+  ipcMain.handle('art:openFile', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'Choose artwork', properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+    });
+    if (r.canceled || !r.filePaths.length) return null;
+    const data = await fs.promises.readFile(r.filePaths[0]);
+    if (data.length > 20 * 1024 * 1024) throw new Error('That image is too large (over 20 MB)');
+    const mime = sniffImage(data);
+    if (!mime) throw new Error('That isn\'t a supported image (JPEG, PNG, GIF or WebP)');
+    return toWire({ mime, data });
+  });
+  ipcMain.handle('art:paste', () => {
+    const img = clipboard.readImage();
+    if (img.isEmpty()) return null;
+    return toWire({ mime: 'image/png', data: img.toPNG() });
+  });
+  ipcMain.handle('online:search', async (_e, { term, kind }) => {
+    if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
+    return online.search(term, kind);
+  });
+  ipcMain.handle('online:image', async (_e, url) => {
+    if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
+    return toWire(await online.downloadImage(url));
+  });
+  ipcMain.handle('art:findMissing', () => findMissingArt());
+  ipcMain.handle('app:openData', () => shell.openPath(app.getPath('userData')));
+
+  // ---- Last.fm
+  const lfStatus = () => ({ ...lastfm.status(), builtInKey: !!builtInLastfmKeys, scrobble: settings.scrobble });
+  ipcMain.handle('lastfm:status', () => lfStatus());
+  ipcMain.handle('lastfm:connect', async () => {
+    const url = await lastfm.beginAuth();
+    shell.openExternal(url);
+    return lfStatus();
+  });
+  ipcMain.handle('lastfm:cancel', () => { lastfm.cancelAuth(); return lfStatus(); });
+  ipcMain.handle('lastfm:disconnect', () => { lastfm.disconnect(); return lfStatus(); });
+  ipcMain.handle('lastfm:setKeys', (_e, keys) => {
+    const apiKey = String(keys?.apiKey || '').trim();
+    const secret = String(keys?.secret || '').trim();
+    settings.lastfmOwnKeys = apiKey && secret ? { apiKey, secret } : null;
+    saveSettings(true);
+    return lfStatus();
+  });
+  ipcMain.handle('lastfm:nowPlaying', (_e, id) => {
+    const t = library.get(id);
+    if (t && settings.scrobble) lastfm.nowPlaying(t);
+  });
+  ipcMain.handle('lastfm:scrobble', (_e, { id, startedAt }) => {
+    const t = library.get(id);
+    if (!t || !settings.scrobble || !Number.isFinite(startedAt)) return false;
+    return lastfm.scrobble(t, startedAt);
+  });
+  ipcMain.handle('art:cancelFind', () => { if (artJob) artJob.cancelled = true; });
+}
+
+// ------------------------------------------------------------------ missing artwork finder
+
+let artJob = null;
+async function findMissingArt() {
+  if (artJob) return { busy: true };
+  if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
+  const albums = library.albumsMissingArt();
+  const job = { cancelled: false, total: albums.length, done: 0, found: 0, current: '' };
+  artJob = job;
+  const report = (finished = false) => send('art:progress', { ...job, finished });
+  report();
+  try {
+    for (const a of albums) {
+      if (job.cancelled) break;
+      job.current = `${a.album}${a.artist ? ` — ${a.artist}` : ''}`;
+      report();
+      try {
+        const match = await online.findAlbumCover(a.artist, a.album);
+        if (match) {
+          const img = await online.downloadImage(match.artwork);
+          await library.setArtwork(a.ids, img);
+          job.found++;
+        }
+      } catch (err) {
+        console.error('artwork lookup failed for', job.current, err.message);
+      }
+      job.done++;
+      // Be gentle with the free search services (iTunes allows about 20 searches a minute).
+      if (!job.cancelled && job.done < albums.length) await new Promise((r) => setTimeout(r, 3000));
+    }
+  } finally {
+    artJob = null;
+    report(true);
+  }
+  return { ...job };
 }
 
 // ------------------------------------------------------------------ startup
@@ -363,6 +558,19 @@ app.whenReady().then(() => {
   library = new Library(app.getPath('userData'));
   library.load();
   library.on('progress', (p) => send('scan:progress', p));
+  lastfm = new Lastfm({
+    fetch: (url, opts) => net.fetch(url, opts),
+    dataDir: app.getPath('userData'),
+    getKeys: lastfmKeys,
+    getSession: getLastfmSession,
+    setSession: setLastfmSession,
+  });
+  lastfm.on('status', (st) => send('lastfm:status', { ...st, builtInKey: !!builtInLastfmKeys, scrobble: settings.scrobble }));
+  lastfm.on('authError', (msg) => send('lastfm:error', msg));
+  if (!SMOKE_TEST) {
+    setTimeout(() => lastfm.flush(), 8000);
+    setInterval(() => lastfm.flush(), 10 * 60 * 1000);
+  }
   library.on('changed', (c) => send('library:changed', c));
   nativeTheme.on('updated', () => send('theme:system', nativeTheme.shouldUseDarkColors));
 
@@ -370,6 +578,10 @@ app.whenReady().then(() => {
   registerProtocol();
   registerIpc();
   createWindow();
+  // Pick up music added to the watched folders while Discshelf was closed.
+  if (settings.rescanOnStart && library.folders.length && !SMOKE_TEST) {
+    win.webContents.once('did-finish-load', () => setTimeout(() => library.scan(), 1500));
+  }
 });
 
 app.on('before-quit', () => {

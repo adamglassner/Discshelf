@@ -50,6 +50,19 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: Build in the Last.fm API key (from repository secrets, if set)
+        shell: pwsh
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+        run: |
+          if ($env:LASTFM_API_KEY -and $env:LASTFM_SECRET) {
+            @{ apiKey = $env:LASTFM_API_KEY.Trim(); secret = $env:LASTFM_SECRET.Trim() } | ConvertTo-Json | Set-Content -Encoding utf8NoBOM src/main/lastfm-key.json
+            Write-Host 'Last.fm API key built in.'
+          } else {
+            Write-Host 'No LASTFM_API_KEY / LASTFM_SECRET secrets: people can enter their own key in Settings.'
+          }
+
       - name: Build installer and portable zip
         run: npx electron-builder --win --x64 --publish never
 

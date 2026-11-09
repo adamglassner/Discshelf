@@ -12,6 +12,34 @@ const COVER_NAMES = ['cover', 'folder', 'front', 'album', 'albumart', 'albumarts
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 const SKIP_DIRS = new Set(['$recycle.bin', 'system volume information', 'node_modules', '.git']);
 const SCAN_CONCURRENCY = 4;
+// Song details people can change in Get Info. Edits are kept in the library (on top of the file's tags),
+// so they survive rescans; the music files themselves aren't changed.
+const EDITABLE = {
+  title: 'text', artist: 'text', albumArtist: 'text', album: 'text', genre: 'text',
+  year: 'int', trackNo: 'int', trackOf: 'int', discNo: 'int', discOf: 'int',
+};
+
+function cleanEdits(fields) {
+  const out = {};
+  for (const [k, kind] of Object.entries(EDITABLE)) {
+    if (!(k in fields)) continue;
+    if (kind === 'int') {
+      const v = parseInt(fields[k], 10);
+      out[k] = Number.isFinite(v) && v > 0 && v < 100000 ? v : 0;
+    } else {
+      out[k] = String(fields[k] ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 500);
+    }
+  }
+  return out;
+}
+
+function applyEdits(t) {
+  if (!t.edits) return t;
+  for (const k of Object.keys(EDITABLE)) if (k in t.edits) t[k] = t.edits[k];
+  if ('art' in t.edits) t.art = t.edits.art;
+  if (!t.title) t.title = path.basename(t.path, path.extname(t.path));
+  return t;
+}
 
 function trackId(filePath) {
   return crypto.createHash('sha1').update(path.resolve(filePath).toLowerCase()).digest('hex').slice(0, 16);
@@ -112,6 +140,50 @@ class Library extends EventEmitter {
     this.scheduleSave();
     this.emit('changed', { removed: gone, folders: true });
     return gone.length;
+  }
+
+  /**
+   * Saves Get Info changes for one or more songs. `fields` holds only the details that changed;
+   * `art` is {mime, data} for new artwork, null to remove it, or undefined to leave it alone.
+   */
+  async updateTracks(ids, fields, art) {
+    const edits = cleanEdits(fields || {});
+    let artName;
+    if (art && art.data) {
+      artName = await this._saveArt(art);
+      if (!artName) throw new Error('The artwork couldn\'t be saved');
+    } else if (art === null) {
+      artName = null;
+    }
+    const changed = [];
+    for (const id of ids) {
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      t.edits = { ...(t.edits || {}), ...edits };
+      if (artName !== undefined) t.edits.art = artName;
+      applyEdits(t);
+      changed.push(id);
+    }
+    if (changed.length) { this.scheduleSave(); this.emit('changed', { updated: changed }); }
+    return changed.length;
+  }
+
+  /** Saves artwork for songs without emitting per-call saves (used by the missing-artwork finder). */
+  async setArtwork(ids, picture) {
+    return this.updateTracks(ids, {}, picture);
+  }
+
+  /** Albums with no artwork: [{key, artist, album, ids}] (songs without an album name are skipped). */
+  albumsMissingArt() {
+    const groups = new Map();
+    for (const t of this.tracks.values()) {
+      if (t.art || !t.album) continue;
+      const artist = t.albumArtist || t.artist || '';
+      const key = `${artist.toLowerCase()}|${t.album.toLowerCase()}`;
+      if (!groups.has(key)) groups.set(key, { key, artist, album: t.album, ids: [] });
+      groups.get(key).ids.push(t.id);
+    }
+    return [...groups.values()];
   }
 
   markPlayed(id) {
@@ -272,6 +344,7 @@ class Library extends EventEmitter {
       playCount: existing ? existing.playCount || 0 : 0,
       lastPlayed: existing ? existing.lastPlayed || 0 : 0,
     };
+    if (existing && existing.edits) { t.edits = existing.edits; applyEdits(t); }
     this.tracks.set(id, t);
     if (existing) state.updated++; else state.added++;
   }
@@ -315,4 +388,4 @@ class Library extends EventEmitter {
   }
 }
 
-module.exports = { Library, trackId };
+module.exports = { Library, trackId, EDITABLE };
