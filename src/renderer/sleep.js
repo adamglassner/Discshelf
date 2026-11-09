@@ -71,9 +71,12 @@ window.DSModules.sleep = (ctx) => {
   function setup() {
     $('#fp-sleep').addEventListener('click', () => set('off'));
     // Pausing during the fade: put the volume back so a later play isn't silent.
-    ctx.audio.addEventListener('pause', () => { if (fading && mode !== 'off') { fading = false; ctx.eq.setMaster(1, 0.1); } });
-    ctx.audio.addEventListener('play', () => { if (mode !== 'off' && endAt && (endAt - Date.now()) / 1000 <= FADE) { fading = true; ctx.eq.setMaster(0, Math.max(0.5, (endAt - Date.now()) / 1000)); } });
+    ctx.onDeck('pause', () => { if (fading && mode !== 'off') { fading = false; ctx.eq.setMaster(1, 0.1); } });
+    ctx.onDeck('play', () => { if (mode !== 'off' && endAt && (endAt - Date.now()) / 1000 <= FADE) { fading = true; ctx.eq.setMaster(0, Math.max(0.5, (endAt - Date.now()) / 1000)); } });
   }
 
-  return { setup, set, tick, onEnded, mode: () => mode, state: () => ({ mode, endAt }) };
+  /** True when the timer will stop playback at the end of this song (so don't line up the next one). */
+  const stopsAfterThis = () => mode === 'song' || (mode === 'album' && ctx.isLastOfAlbum());
+
+  return { setup, set, tick, onEnded, stopsAfterThis, mode: () => mode, state: () => ({ mode, endAt }) };
 };

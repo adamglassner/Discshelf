@@ -495,6 +495,15 @@ class Library extends EventEmitter {
     return [...groups.values()];
   }
 
+  /** Loudness measured for volume leveling (kept in the library, not in the file). */
+  setLoudness(id, lufs) {
+    const t = this.tracks.get(id);
+    if (!t || !Number.isFinite(lufs)) return false;
+    t.lufs = lufs;
+    this.scheduleSave();
+    return true;
+  }
+
   markPlayed(id, seconds) {
     const t = this.tracks.get(id);
     if (!t) return null;
@@ -669,7 +678,13 @@ class Library extends EventEmitter {
       lastPlayed: existing ? existing.lastPlayed || 0 : 0,
       rating: tags.rating || (existing ? existing.rating || 0 : 0),
       loved: !!(tags.loved || (existing && existing.loved)),
+      rgTrack: tags.rgTrack ?? null,
+      rgAlbum: tags.rgAlbum ?? null,
+      rgPeak: tags.rgTrackPeak ?? null,
+      hasLyrics: !!tags.lyrics,
     };
+    // Measured loudness (volume leveling) stays valid while the audio is the same length.
+    if (existing && existing.lufs !== undefined && Math.abs((existing.duration || 0) - t.duration) < 0.5) t.lufs = existing.lufs;
     if (existing && existing.edits) { t.edits = existing.edits; applyEdits(t); }
     this.tracks.set(id, t);
     if (existing) state.updated++; else state.added++;

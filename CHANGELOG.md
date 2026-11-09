@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- **Gapless playback.** The next song is loaded while the current one plays, so albums meant to flow from one track into the next (live albums, DJ mixes, concept albums) play without a gap.
+- **Crossfade.** Settings → Playback: let songs fade into each other over 1 to 10 seconds.
+- **Volume leveling.** Settings → Playback: play every song at about the same loudness (**Songs**), or keep each album at one level so its quiet songs stay quiet (**Albums**). Uses ReplayGain from your files (including Opus R128 gain) and measures the loudness of songs without it in the background, the same way broadcasters do (EBU R128).
+- **Lyrics.** A Lyrics tab in the album art pane (View → Lyrics, Ctrl+Shift+L). Discshelf reads lyrics from a .lrc file next to the song, from the music file, or looks them up on LRCLIB. Synced lyrics follow the song with the current line highlighted; click a line to jump there. Online lookup can be turned off in Settings.
+- **Visualizer.** Bars, a waveform, or a ring around the album art, over a blurred backdrop of the cover. Open it with the button in the player bar, View → Visualizer (Ctrl+Shift+V) or by double-clicking the artwork in the player; double-click it for full screen, Esc to close.
+
 ## 0.5.0
 
 - **Playlists.** Make playlists in the new Playlists section of the sidebar (the **+** button or Ctrl+N), then drag songs, albums or artists onto them, or right-click songs and choose **Add to Playlist**. Drag songs within a playlist to change the order; press Delete to take a song out of the playlist (it stays in your library). Right-click a playlist to play, shuffle, rename, duplicate, export it as an .m3u file, or delete it. **File → Import Playlist** reads .m3u and .m3u8 files.

@@ -1,7 +1,7 @@
 'use strict';
 // ID3v2.2/2.3/2.4 and ID3v1 tags, plus MP3 duration (Xing/Info/VBRI headers, or a CBR estimate).
-const { decodeUtf16, cleanText, parseNumberPair, parseYear, imageMimeFromData } = require('./reader');
-const { normalizeId3Genre, genreFromIndex, ratingFromPopm, ratingFromFraction } = require('./common');
+const { decodeUtf16, cleanText, stripNulls, parseNumberPair, parseYear, imageMimeFromData } = require('./reader');
+const { normalizeId3Genre, genreFromIndex, ratingFromPopm, ratingFromFraction, applyReplayGain } = require('./common');
 
 const MAX_ID3_SIZE = 64 * 1024 * 1024;
 
@@ -131,6 +131,14 @@ async function readId3v2(src, offset, tags) {
     } else if ((id === 'POPM' || id === 'POP') && !tags.rating) {
       const end = data.indexOf(0);
       if (end >= 0 && end + 1 < data.length) tags.rating = ratingFromPopm(data[end + 1]);
+    } else if ((id === 'USLT' || id === 'ULT') && !tags.lyrics && data.length > 4) {
+      // encoding, language (3), description, text
+      const enc = data[0];
+      const end = findTerminator(data, 4, enc);
+      if (end >= 0) {
+        const text = decodeText(enc, data.subarray(end + (enc === 1 || enc === 2 ? 2 : 1)));
+        tags.lyrics = stripNulls(text).replace(/\r\n?/g, '\n').trim();
+      }
     } else if (id === 'TXXX' || id === 'TXX') {
       const t = userTextFrame(data);
       if (t) userText[t.key] = t.value;
@@ -141,6 +149,8 @@ async function readId3v2(src, offset, tags) {
 
   const f = (...ids) => { for (const id of ids) if (frames[id]) return frames[id]; return ''; };
   if (/^(1|true|yes)$/i.test(userText.LOVED || '')) tags.loved = true;
+  applyReplayGain((k) => userText[k], tags);
+  if (!tags.lyrics) tags.lyrics = (userText.LYRICS || userText.UNSYNCEDLYRICS || userText.USLT || '').replace(/\\n/g, '\n').trim();
   if (!tags.rating && userText.FMPS_RATING) tags.rating = ratingFromFraction(userText.FMPS_RATING);
   tags.title = f('TIT2', 'TT2') || tags.title;
   tags.artist = f('TPE1', 'TP1') || tags.artist;

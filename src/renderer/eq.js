@@ -1,5 +1,6 @@
 'use strict';
-/* 10-band equalizer on the Web Audio API: audio element → preamp → 10 filters → speakers. */
+/* The audio graph: two players ("decks", for gapless playback and crossfades), each with a fade gain
+   and a volume-leveling gain → preamp → 10-band equalizer → analyser (visualizer) → master (sleep fade). */
 window.DSModules = window.DSModules || {};
 window.DSModules.eq = (ctx) => {
   const { esc, state } = ctx;
@@ -33,14 +34,22 @@ window.DSModules.eq = (ctx) => {
   let filters = [];
   let analyser = null;
   let master = null;
+  const deckNodes = new Map(); // audio element -> {fade, level}
 
   /** Builds the audio graph once. Must run before the first song plays. */
   function init() {
     if (ac) return;
     try {
       ac = new AudioContext({ latencyHint: 'playback' });
-      const src = ac.createMediaElementSource(ctx.audio);
       pre = ac.createGain();
+      for (const el of ctx.decks) {
+        const src = ac.createMediaElementSource(el);
+        const fade = ac.createGain();
+        const level = ac.createGain();
+        src.connect(fade).connect(level).connect(pre);
+        deckNodes.set(el, { fade, level });
+        el.addEventListener('play', () => { if (ac.state !== 'running') ac.resume(); });
+      }
       filters = BANDS.map((f, i) => {
         const b = ac.createBiquadFilter();
         b.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking';
@@ -50,14 +59,14 @@ window.DSModules.eq = (ctx) => {
         return b;
       });
       analyser = ac.createAnalyser();
-      analyser.fftSize = 256;
-      let node = src.connect(pre);
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.78;
+      let node = pre;
       for (const f of filters) node = node.connect(f);
       node.connect(analyser);
       master = ac.createGain();
       analyser.connect(master);
       master.connect(ac.destination);
-      ctx.audio.addEventListener('play', () => { if (ac.state !== 'running') ac.resume(); });
       apply();
     } catch (err) {
       console.error('Equalizer unavailable:', err);
@@ -66,6 +75,36 @@ window.DSModules.eq = (ctx) => {
   }
 
   const dbToGain = (db) => 10 ** (db / 20);
+
+  /** Fades one deck to `value` (0–1) over `seconds` (crossfades). False when Web Audio isn't available. */
+  function deckFade(el, value, seconds = 0) {
+    const n = deckNodes.get(el);
+    if (!n) return false;
+    const t = ac.currentTime;
+    n.fade.gain.cancelScheduledValues(t);
+    n.fade.gain.setValueAtTime(n.fade.gain.value, t);
+    if (seconds > 0) {
+      // An equal-power-ish curve sounds smoother than a straight line.
+      const from = n.fade.gain.value;
+      const steps = 24;
+      const curve = new Float32Array(steps + 1).map((_, i) => {
+        const x = i / steps;
+        return value > from ? from + (value - from) * Math.sin((x * Math.PI) / 2) : value + (from - value) * Math.cos((x * Math.PI) / 2);
+      });
+      n.fade.gain.setValueCurveAtTime(curve, t, seconds);
+    } else {
+      n.fade.gain.setValueAtTime(value, t);
+    }
+    return true;
+  }
+
+  /** Volume leveling: a fixed gain for the song on this deck. */
+  function deckLevel(el, gain) {
+    const n = deckNodes.get(el);
+    if (!n) return false;
+    n.level.gain.setTargetAtTime(gain, ac.currentTime, 0.05);
+    return true;
+  }
 
   /** Fades the whole output to `value` (0–1) over `seconds`; used by the sleep timer. */
   function setMaster(value, seconds = 0) {
@@ -189,5 +228,5 @@ window.DSModules.eq = (ctx) => {
     return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)}`;
   }
 
-  return { init, apply, open, summary, level, setMaster, analyser: () => analyser, PRESETS, BANDS };
+  return { init, apply, open, summary, level, setMaster, deckFade, deckLevel, ready: () => !!ac, analyser: () => analyser, PRESETS, BANDS };
 };

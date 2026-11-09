@@ -25,6 +25,17 @@ window.DSModules.settings = (ctx) => {
     return `<div class="seg" role="radiogroup">${options.map(([v, l]) => `<button type="button" role="radio" data-${name}="${v}" aria-checked="${value === v}">${l}</button>`).join('')}</div>`;
   }
 
+  const xfHint = (v) => (Number(v) ? `Songs fade into each other over ${Number(v)} seconds. Albums you play in order still play gaplessly.` : 'Off: songs play back to back with no gap (gapless).');
+
+  function levelHint() {
+    const mode = state.settings.leveling || 'off';
+    if (mode === 'off') return 'Plays songs as loud as they were made.';
+    const p = ctx.leveling.progress();
+    const left = ctx.leveling.pending();
+    const what = mode === 'album' ? 'Keeps albums at one even level, so quiet songs on an album stay quiet.' : 'Plays every song at about the same loudness.';
+    return `${what} Uses ReplayGain from the files${left ? `; measuring the others: ${plural(left, 'song', 'songs')} to go` : p.done ? '; all songs measured' : ''}.`;
+  }
+
   function lastfmHtml() {
     if (!lf.hasKeys) {
       return `<p class="set-hint">This copy of Discshelf doesn’t have a Last.fm API key built in yet. If you have one (from <a href="https://www.last.fm/api/account/create">last.fm/api/account/create</a>), enter it here:</p>
@@ -92,10 +103,17 @@ window.DSModules.settings = (ctx) => {
           <p class="set-hint">${plural(state.tracks.length, 'song', 'songs')} in ${plural(ctx.albums.all().length, 'album', 'albums')}.</p>
         </section>
 
-        <section class="set-card">
+        <section class="set-card" id="set-playback">
           <h2>Playback</h2>
           <div class="set-row"><span class="set-text"><span class="set-label">Equalizer</span><span class="set-hint" id="set-eq-summary">${esc(ctx.eq.summary())}</span></span>
             <button type="button" class="btn" id="set-eq">Open equalizer</button></div>
+          <div class="set-row"><span class="set-text"><span class="set-label">Crossfade</span>
+            <span class="set-hint" id="set-xf-hint">${xfHint(s.crossfade)}</span></span>
+            <span class="set-slider"><input type="range" id="set-crossfade" min="0" max="10" step="1" value="${Number(s.crossfade) || 0}" style="--pct:${(Number(s.crossfade) || 0) * 10}%" aria-label="Crossfade seconds"><b id="set-xf-val">${Number(s.crossfade) ? `${Number(s.crossfade)} s` : 'Off'}</b></span></div>
+          <div class="set-row"><span class="set-text"><span class="set-label">Volume leveling</span>
+            <span class="set-hint" id="set-level-hint">${levelHint()}</span></span>
+            ${seg('level', s.leveling || 'off', [['off', 'Off'], ['track', 'Songs'], ['album', 'Albums']])}</div>
+          ${toggle('set-lyricsonline', s.lyricsOnline !== false, 'Look up lyrics online', 'Uses LRCLIB (lrclib.net) when a song has no lyrics in its file or a .lrc file next to it. Only the artist, title, album and length are sent.')}
           ${toggle('set-resume', s.resumeOnStart !== false, 'Pick up where I left off', 'When Discshelf starts, the last song is ready to play from where you stopped.')}
         </section>
 
@@ -173,6 +191,8 @@ window.DSModules.settings = (ctx) => {
       if (style) { ctx.setAppearance({ style: style.dataset.style }); render(); return; }
       const acc = t.closest('[data-accent]');
       if (acc) { ctx.saveSettings({ accent: acc.dataset.accent }); ctx.colors.update(); render(); return; }
+      const lv = t.closest('.seg [data-level]');
+      if (lv) { ctx.saveSettings({ leveling: lv.dataset.level }); ctx.applyLevel(); if (lv.dataset.level !== 'off') ctx.leveling.run(); render(); return; }
       const mode = t.closest('.seg [data-mode]');
       if (mode) { ctx.setAppearance({ theme: mode.dataset.mode }); render(); return; }
       const rm = t.closest('[data-remove-folder]');
@@ -235,10 +255,20 @@ window.DSModules.settings = (ctx) => {
       if (id === 'set-online') { ctx.saveSettings({ onlineLookup: e.target.checked }); render(); }
       if (id === 'set-scrobble') ctx.saveSettings({ scrobble: e.target.checked });
       if (id === 'set-writetags') { ctx.saveSettings({ writeTags: e.target.checked }); refreshPending(); }
+      if (id === 'set-lyricsonline') ctx.saveSettings({ lyricsOnline: e.target.checked });
+      if (id === 'set-crossfade') ctx.saveSettings({ crossfade: parseInt(e.target.value, 10) || 0 });
       if (id === 'set-albumcolors') { ctx.saveSettings({ albumColors: e.target.checked }); ctx.colors.update(); }
       if (id === 'set-checkupdates') ctx.saveSettings({ checkUpdates: e.target.checked });
     });
 
+    view.addEventListener('input', (e) => {
+      if (e.target.id !== 'set-crossfade') return;
+      const v = parseInt(e.target.value, 10) || 0;
+      $('#set-xf-val').textContent = v ? `${v} s` : 'Off';
+      $('#set-xf-hint').textContent = xfHint(v);
+      e.target.style.setProperty('--pct', `${v * 10}%`);
+    });
+    ctx.leveling.onProgress(() => { const el = $('#set-level-hint'); if (el && state.view === 'settings') el.textContent = levelHint(); });
     api.onTagProgress((p) => {
       const el = $('#set-pending-status');
       if (el && writing) el.textContent = `Saving into files… ${n(p.done)} of ${n(p.total)}`;

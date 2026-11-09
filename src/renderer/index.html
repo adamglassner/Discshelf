@@ -46,6 +46,7 @@
       <button type="button" class="ibtn toggle" id="btn-repeat" aria-label="Repeat: off" aria-pressed="false" title="Repeat: off"></button>
       <button type="button" class="ibtn toggle" id="btn-eq" aria-label="Equalizer" aria-pressed="false" title="Equalizer"></button>
       <button type="button" class="ibtn toggle" id="btn-queue" aria-label="Up Next" aria-pressed="false" title="Up Next"></button>
+      <button type="button" class="ibtn toggle" id="btn-viz" aria-label="Visualizer" aria-pressed="false" title="Visualizer (Ctrl+Shift+V)"></button>
       <div class="volume">
         <button type="button" class="ibtn" id="btn-mute" aria-label="Mute" title="Mute"></button>
         <input type="range" id="volume" min="0" max="100" value="80" aria-label="Volume">
@@ -163,13 +164,16 @@
     <div class="splitter vert" data-split="art" aria-hidden="true"></div>
     <aside id="artpane" aria-label="Album art">
       <div class="art-tabs" role="tablist">
-        <button type="button" role="tab" data-artmode="playing" aria-selected="true">Now playing</button>
+        <button type="button" role="tab" data-artmode="playing" aria-selected="true" title="Now playing">Playing</button>
         <button type="button" role="tab" data-artmode="selected" aria-selected="false">Selected</button>
+        <button type="button" role="tab" data-artmode="lyrics" aria-selected="false">Lyrics</button>
       </div>
       <div class="art-frame" id="art-frame"></div>
       <div class="art-info" id="art-info"></div>
+      <div class="art-lyrics" id="art-lyrics" hidden></div>
     </aside>
     <aside id="queue-panel" aria-label="Up Next" hidden></aside>
+    <section id="visualizer" aria-label="Visualizer" hidden></section>
   </main>
 
   <footer id="statusbar">
@@ -198,6 +202,9 @@
 <script src="sleep.js"></script>
 <script src="colors.js"></script>
 <script src="version.js"></script>
+<script src="leveling.js"></script>
+<script src="lyrics.js"></script>
+<script src="visualizer.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

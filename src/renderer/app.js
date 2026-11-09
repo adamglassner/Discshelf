@@ -43,9 +43,19 @@
     playlists: [],
   };
 
-  const audio = new Audio();
-  audio.preload = 'auto';
-  audio.crossOrigin = 'anonymous'; // lets the equalizer (Web Audio) process the sound
+  // Two players: one plays, the other loads the next song so it can start without a gap (or crossfade in).
+  const decks = [new Audio(), new Audio()];
+  for (const d of decks) {
+    d.preload = 'auto';
+    d.crossOrigin = 'anonymous'; // lets the equalizer (Web Audio) process the sound
+  }
+  let audio = decks[0]; // the deck that's playing
+  const standby = () => (audio === decks[0] ? decks[1] : decks[0]);
+  /** Listens to whichever deck is playing (events from the other deck are ignored). */
+  function onDeck(type, fn) {
+    for (const d of decks) d.addEventListener(type, (e) => { if (e.target === audio) fn(e); });
+  }
+  const engine = { preparedId: null, fade: -1 };
 
   // ---------------------------------------------------------------- helpers
 
@@ -166,6 +176,7 @@
     if (state.view === 'settings') mods.settings.render();
     if (isToolView(state.view)) mods.tools.refresh(state.view);
     mods.queue.render();
+    if (mods.leveling && (state.settings.leveling || 'off') !== 'off') setTimeout(() => mods.leveling.run(), 1500);
     updateLoveButton();
   }
 
@@ -721,6 +732,11 @@
 
   function renderArtPane(selectedId) {
     if (!state.settings.showArtPane) return;
+    const lyr = state.artMode === 'lyrics';
+    $('#art-frame').hidden = lyr;
+    $('#art-info').hidden = lyr;
+    $('#art-lyrics').hidden = !lyr;
+    if (lyr) { mods.lyrics.show(); return; }
     if (state.artMode === 'playing' && state.radio) { renderRadioArt(); return; }
     let t = null;
     if (state.artMode === 'playing') t = state.current;
@@ -906,6 +922,9 @@
   /** Plays a live station. `list` is where next / previous move to. */
   function playRadio(station, list = []) {
     if (!station || !station.url) return;
+    stopStandby();
+    mods.eq.deckFade(audio, 1, 0);
+    mods.eq.deckLevel(audio, 1);
     state.radio = { station, title: '', list, startedAt: Date.now() };
     state.current = null;
     state.play = null;
@@ -927,13 +946,114 @@
     mods.radio.refreshPlaying();
   }
 
+  const mediaUrl = (t) => `discshelf://media/${encodeURIComponent(t.id)}`;
+
+  /** Empties the standby deck (cancels a prepared song or a fade-out still running). */
+  function stopStandby() {
+    const sb = standby();
+    sb.pause();
+    if (sb.getAttribute('src')) { sb.removeAttribute('src'); sb.load(); }
+    delete sb.dataset.id;
+    engine.preparedId = null;
+  }
+
+  /** Loads the song that will play next into the standby deck. */
+  function prepareNext() {
+    const nx = autoNext();
+    if (!nx) { if (engine.preparedId) stopStandby(); return; }
+    if (engine.preparedId === nx.id) return;
+    const sb = standby();
+    sb.pause();
+    sb.src = mediaUrl(nx);
+    sb.dataset.id = nx.id;
+    sb.volume = audio.volume;
+    sb.muted = audio.muted;
+    sb.load();
+    engine.preparedId = nx.id;
+  }
+
+  /** The song that plays by itself after this one, or null (end of list, repeat one, sleep timer, radio). */
+  function autoNext() {
+    if (state.radio || !state.current || state.settings.repeat === 'one' || mods.sleep.stopsAfterThis()) return null;
+    const nx = peekNext();
+    return nx && nx.codec !== 'ALAC' ? nx : null;
+  }
+
+  const crossfadeSecs = () => Math.max(0, Math.min(12, Number(state.settings.crossfade) || 0));
+
+  /** Runs every 50 ms while playing: starts the next song right at the end of this one (gapless),
+   *  or `crossfade` seconds before the end, fading one into the other. */
+  function engineTick() {
+    if (state.radio || !state.current || audio.paused || engine.fade >= 0) return;
+    const d = audio.duration;
+    if (!Number.isFinite(d) || d <= 0) return;
+    const left = d - audio.currentTime;
+    if (left > 25) return;
+    prepareNext();
+    const xf = mods.eq.ready() ? Math.min(crossfadeSecs(), d / 3) : 0;
+    const lead = xf > 0 ? xf : 0.045;
+    if (left > lead || !engine.preparedId) return;
+    const sb = standby();
+    if (sb.readyState < 3) return; // not loaded yet: the 'ended' event plays it the normal way
+    engine.fade = xf > 0 ? left : 0;
+    countPlay();
+    advance(1, { fromEnded: true });
+    engine.fade = -1;
+  }
+
+  /** Volume leveling: the gain for a song (ReplayGain tags, or loudness measured by Discshelf). */
+  function levelGain(t) {
+    const mode = state.settings.leveling || 'off';
+    if (mode === 'off' || !t) return 1;
+    const measured = (x) => (Number.isFinite(x.lufs) ? -18 - x.lufs : null);
+    let db = null;
+    if (mode === 'album') db = t.rgAlbum ?? mods.leveling.albumGain(t);
+    if (db === null) db = t.rgTrack ?? measured(t);
+    if (db === null) db = -4; // not measured yet: modern masters are usually louder than the target
+    let max = 9;
+    if (t.rgPeak) max = Math.min(max, -20 * Math.log10(t.rgPeak));
+    db = Math.max(-24, Math.min(max, db + (Number(state.settings.levelPreamp) || 0)));
+    return 10 ** (db / 20);
+  }
+
   function loadAndPlay(t, { autoplay = true, at = 0 } = {}) {
     if (!t) return;
     leaveRadio();
     state.current = t;
     state.counted = false;
     state.play = { id: t.id, startedAt: 0, listened: 0, lastPos: at || 0, scrobbled: false };
-    audio.src = `discshelf://media/${encodeURIComponent(t.id)}`;
+    const sb = standby();
+    if (autoplay && !at && engine.preparedId === t.id && sb.dataset.id === t.id) {
+      // The next song is already loaded on the other deck: switch decks.
+      const old = audio;
+      const fade = engine.fade > 0 ? engine.fade : 0;
+      audio = sb;
+      engine.preparedId = null;
+      mods.eq.deckLevel(audio, levelGain(t));
+      mods.eq.deckFade(audio, fade ? 0 : 1, 0);
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      if (fade) {
+        mods.eq.deckFade(audio, 1, fade);
+        mods.eq.deckFade(old, 0, fade);
+        setTimeout(() => { if (old !== audio) { old.pause(); old.removeAttribute('src'); old.load(); delete old.dataset.id; } }, fade * 1000 + 150);
+      } else {
+        old.pause();
+        old.removeAttribute('src');
+        old.load();
+        delete old.dataset.id;
+      }
+      updatePlayButton();
+      updateNowPlaying();
+      saveSettings({ lastTrackId: t.id, lastPosition: 0 });
+      mods.queue.render();
+      return;
+    }
+    stopStandby();
+    mods.eq.deckFade(audio, 1, 0);
+    mods.eq.deckLevel(audio, levelGain(t));
+    audio.dataset.id = t.id;
+    audio.src = mediaUrl(t);
     if (at > 0) {
       const seekOnce = () => { try { audio.currentTime = at; } catch { /* ignore */ } };
       audio.addEventListener('loadedmetadata', seekOnce, { once: true });
@@ -1049,7 +1169,7 @@
       document.title = `${r.title || st.name} · Discshelf`;
       updatePlayButton();
       updateTime();
-      if (state.artMode === 'playing') renderArtPane();
+      if (state.artMode !== 'selected') renderArtPane();
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({ title: r.title || st.name, artist: r.title ? st.name : 'Live radio', album: '', artwork: st.favicon ? [{ src: st.favicon }] : [] });
       }
@@ -1079,9 +1199,10 @@
     updateRowStates();
     mods.albums.updatePlaying();
     mods.artists.updatePlaying();
-    if (state.artMode === 'playing') renderArtPane();
+    if (state.artMode !== 'selected') renderArtPane();
     updateLoveButton();
     mods.colors.update();
+    mods.visualizer.refresh();
 
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -1155,7 +1276,7 @@
       t.playCount = r.playCount;
       t.lastPlayed = r.lastPlayed;
       renderRows(true);
-      if (state.artMode === 'playing') renderArtPane();
+      if (state.artMode !== 'selected') renderArtPane();
     });
   }
 
@@ -1206,7 +1327,7 @@
     if (song.listened >= need) {
       song.scrobbled = true;
       api.lastfmRadioScrobble({ artist: song.artist, title: song.title }, song.startedAt);
-      if (state.artMode === 'playing') renderArtPane();
+      if (state.artMode !== 'selected') renderArtPane();
     }
   }
 
@@ -1229,9 +1350,9 @@
 
   let lastPositionSave = 0;
   function setupAudio() {
-    audio.addEventListener('play', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); });
-    audio.addEventListener('pause', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); if (state.radio) return; saveSettings({ lastPosition: audio.currentTime || 0 }); });
-    audio.addEventListener('playing', () => {
+    onDeck('play', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); });
+    onDeck('pause', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); if (state.radio) return; saveSettings({ lastPosition: audio.currentTime || 0 }); });
+    onDeck('playing', () => {
       state.errorsInARow = 0;
       const p = state.play;
       if (p && !p.startedAt && state.current && p.id === state.current.id) {
@@ -1239,7 +1360,7 @@
         api.lastfmNowPlaying(p.id);
       }
     });
-    audio.addEventListener('timeupdate', () => {
+    onDeck('timeupdate', () => {
       updateTime();
       trackListening();
       const d = audio.duration;
@@ -1247,8 +1368,8 @@
       const now = Date.now();
       if (now - lastPositionSave > 5000 && !audio.paused) { lastPositionSave = now; saveSettings({ lastPosition: audio.currentTime }); }
     });
-    audio.addEventListener('durationchange', updateTime);
-    audio.addEventListener('ended', () => {
+    onDeck('durationchange', updateTime);
+    onDeck('ended', () => {
       if (state.radio) { toast(`${state.radio.station.name} stopped broadcasting.`); updatePlayButton(); return; }
       countPlay();
       if (mods.sleep.onEnded()) { updatePlayButton(); updateRowStates(); return; }
@@ -1258,7 +1379,7 @@
       }
       advance(1, { fromEnded: true });
     });
-    audio.addEventListener('error', () => {
+    onDeck('error', () => {
       if (state.radio) {
         toast(`Couldn’t play ${state.radio.station.name}. The station may be offline; try another one.`, 'error');
         updatePlayButton();
@@ -1290,8 +1411,7 @@
 
     const vol = $('#volume');
     const applyVolume = () => {
-      audio.volume = state.settings.volume;
-      audio.muted = !!state.settings.muted;
+      for (const d of decks) { d.volume = state.settings.volume; d.muted = !!state.settings.muted; }
       vol.value = Math.round(state.settings.volume * 100);
       setRangePct(vol, state.settings.muted ? 0 : state.settings.volume * 100);
       const icon = state.settings.muted || state.settings.volume === 0 ? I.mute : state.settings.volume < 0.5 ? I.volumeLow : I.volume;
@@ -1310,6 +1430,7 @@
     state.applyVolume = applyVolume;
     applyVolume();
 
+    setInterval(engineTick, 50);
     $('#btn-play').addEventListener('click', playPause);
     $('#btn-next').addEventListener('click', next);
     $('#btn-prev').addEventListener('click', prev);
@@ -1534,7 +1655,7 @@
     switch (name) {
       case 'appearance': Object.assign(state.settings, arg); applyTheme(); if (state.view === 'settings') mods.settings.render(); break;
       case 'view': setView(arg); break;
-      case 'settings': setView('settings'); break;
+      case 'settings': setView('settings'); if (arg) setTimeout(() => $(`#set-${arg}`)?.scrollIntoView({ block: 'start' }), 0); break;
       case 'equalizer': mods.eq.open(); break;
       case 'getInfo': getInfo(arg); break;
       case 'goToAlbum': mods.albums.openForTrack(arg); break;
@@ -1567,6 +1688,8 @@
       case 'love': love(arg.ids, arg.loved); break;
       case 'sleep': mods.sleep.set(arg); break;
       case 'whatsNew': setView('version'); break;
+      case 'showLyrics': showLyrics(); break;
+      case 'visualizer': mods.visualizer.toggle(); updateVizButton(); break;
       case 'checkUpdates': setView('version'); mods.version.check(); break;
       default: break;
     }
@@ -1584,7 +1707,10 @@
       if (ctrl && e.key === ',') { e.preventDefault(); setView('settings'); return; }
       if (ctrl && e.key.toLowerCase() === 'n') { e.preventDefault(); mods.playlists.create(currentSelection()); return; }
       if (ctrl && e.key.toLowerCase() === 'u') { e.preventDefault(); mods.queue.toggle(); return; }
+      if (e.key === 'Escape' && mods.visualizer.isOpen()) { e.preventDefault(); mods.visualizer.toggle(false); updateVizButton(); return; }
       if (e.key === 'Escape' && !$('#queue-panel').hidden && !inInput) { e.preventDefault(); mods.queue.toggle(false); return; }
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === 'v' && !inInput) { e.preventDefault(); runCommand({ name: 'visualizer' }); return; }
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); showLyrics(); return; }
       if (inInput) return;
       if (ctrl && e.key.toLowerCase() === 'i') {
         e.preventDefault();
@@ -1684,10 +1810,10 @@
   const mods = {};
   const ctx = {
     api, I, $, $$, esc, fold, n, plural, fmtTime, fmtTotal, fmtSize, artUrl, formatLine, toast, modal, collator, sortName,
-    isInside, state, audio, saveSettings, setAppearance, setView, playQueue, reloadLibrary, renderStatus, renderArtPane,
+    isInside, state, get audio() { return audio; }, decks, onDeck, levelGain: (t) => levelGain(t), saveSettings, setAppearance, setView, playQueue, reloadLibrary, renderStatus, renderArtPane,
     playRadio, renderSidebar: () => renderSidebar(), clearSearch: () => { $('#search').value = ''; state.search = ''; recompute(); },
     shortcuts, getInfo: (ids) => getInfo(ids), findMissingArt: () => findMissingArt(),
-    recompute: () => recompute(), currentSelection: () => currentSelection(), playTrack, jumpInQueue, isLastOfAlbum,
+    recompute: () => recompute(), applyLevel: () => { if (state.current) mods.eq.deckLevel(audio, levelGain(state.current)); }, currentSelection: () => currentSelection(), playTrack, jumpInQueue, isLastOfAlbum,
     revealTrack: (id) => revealTrack(id), rate: (ids, r) => rate(ids, r), love: (ids, l) => love(ids, l), formatLine,
     onEqChange: () => { updateEqButton(); mods.settings.refreshEq(); },
   };
@@ -1695,6 +1821,15 @@
   function getInfo(ids) {
     if (ids && ids.length) mods.info.open(ids);
   }
+
+  function showLyrics() {
+    if (!state.settings.showArtPane) { saveSettings({ showArtPane: true }); applyLayout(); }
+    state.artMode = 'lyrics';
+    for (const t of $$('.art-tabs [data-artmode]')) t.setAttribute('aria-selected', String(t.dataset.artmode === 'lyrics'));
+    renderArtPane();
+  }
+
+  function updateVizButton() { $('#btn-viz').setAttribute('aria-pressed', String(mods.visualizer.isOpen())); }
 
   /** The songs selected in whichever view is showing. */
   function currentSelection() {
@@ -1761,6 +1896,10 @@
     mods.sleep = window.DSModules.sleep(ctx);
     mods.colors = window.DSModules.colors(ctx);
     mods.version = window.DSModules.version(ctx);
+    mods.leveling = window.DSModules.leveling(ctx);
+    mods.lyrics = window.DSModules.lyrics(ctx);
+    mods.visualizer = window.DSModules.visualizer(ctx);
+    ctx.leveling = mods.leveling;
     ctx.albums = mods.albums;
     ctx.artists = mods.artists;
     ctx.eq = mods.eq;
@@ -1780,6 +1919,11 @@
     mods.tools.setup();
     mods.sleep.setup();
     mods.version.setup();
+    mods.lyrics.setup();
+    mods.visualizer.setup();
+    $('#btn-viz').innerHTML = I.viz;
+    $('#btn-viz').addEventListener('click', () => runCommand({ name: 'visualizer' }));
+    $('#fp-art').addEventListener('dblclick', () => runCommand({ name: 'visualizer' }));
     applyTheme();
     setupFilters();
     setupTrackList();
@@ -1820,8 +1964,9 @@
     });
     updateMode();
     if (mods.version.onStart()) setView('version');
+    setTimeout(() => mods.leveling.run(), 4000);
     window.__discshelfReady = true;
-    window.__discshelfTest = { level: () => mods.eq.level(), state, mods, runCommand };
+    window.__discshelfTest = { level: () => mods.eq.level(), state, mods, runCommand, get audio() { return audio; }, decks };
   }
 
   start().catch((err) => {

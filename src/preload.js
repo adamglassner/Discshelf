@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('discshelf', {
   removeTracks: (ids) => ipcRenderer.invoke('library:removeTracks', ids),
   markPlayed: (id, seconds) => ipcRenderer.invoke('track:played', { id, seconds }),
   changelog: () => ipcRenderer.invoke('app:changelog'),
+  setLoudness: (id, lufs) => ipcRenderer.invoke('track:setLoudness', { id, lufs }),
+  lyrics: (id) => ipcRenderer.invoke('lyrics:get', id),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   openUrl: (url) => ipcRenderer.invoke('app:openUrl', url),
   showInFolder: (id) => ipcRenderer.invoke('track:showInFolder', id),

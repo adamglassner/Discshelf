@@ -1,7 +1,7 @@
 'use strict';
 // MP4 / M4A: walks the box tree (never reads mdat), mvhd for duration, stsd for the codec, ilst for tags.
 const { cleanText, parseYear, imageMimeFromData } = require('./reader');
-const { genreFromIndex, ratingFromPercent } = require('./common');
+const { genreFromIndex, ratingFromPercent, applyReplayGain } = require('./common');
 
 const MAX_MOOV = 128 * 1024 * 1024;
 const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'udta', 'ilst', 'edts', 'dinf']);
@@ -39,6 +39,7 @@ function parseIlst(buf, start, end, tags) {
       const key = name.toUpperCase();
       if (key === 'RATING') tags.rating = ratingFromPercent(value) || tags.rating;
       if (key === 'LOVED' && /^(1|true|yes)$/i.test(value.trim())) tags.loved = true;
+      if (key.startsWith('REPLAYGAIN_')) applyReplayGain((k) => (k === key ? value : null), tags);
       continue;
     }
     for (const d of boxes(buf, item.start, item.end)) {
@@ -52,6 +53,7 @@ function parseIlst(buf, start, end, tags) {
         case 'aART': tags.albumArtist = text() || tags.albumArtist; break;
         case '\xA9alb': tags.album = text() || tags.album; break;
         case '\xA9gen': tags.genre = text() || tags.genre; break;
+        case '\xA9lyr': tags.lyrics = value.toString('utf8').replace(/\r\n?/g, '\n').trim() || tags.lyrics; break;
         case 'gnre': if (value.length >= 2) tags.genre = tags.genre || genreFromIndex(value.readUInt16BE(0) - 1); break;
         case '\xA9day': tags.year = parseYear(text()) || tags.year; break;
         case 'trkn':

@@ -94,6 +94,7 @@ function choosePicture(pictures) {
 module.exports = {
   FileSource,
   decodeUtf16,
+  stripNulls,
   cleanText,
   parseNumberPair,
   parseYear,

@@ -58,12 +58,36 @@ function ratingFromPopm(b) {
   return 5;
 }
 
+/** "-6.48 dB" → -6.48; null when missing or nonsense. */
+function parseGain(v) {
+  const n = parseFloat(String(v || '').replace(',', '.'));
+  return Number.isFinite(n) && Math.abs(n) < 60 ? Math.round(n * 100) / 100 : null;
+}
+function parsePeak(v) {
+  const n = parseFloat(String(v || '').replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n < 10 ? n : null;
+}
+
+/** REPLAYGAIN_* fields (any tag format, keys upper-case) → tags.rgTrack/rgAlbum/rgTrackPeak/rgAlbumPeak. */
+function applyReplayGain(get, tags) {
+  tags.rgTrack = parseGain(get('REPLAYGAIN_TRACK_GAIN')) ?? tags.rgTrack;
+  tags.rgAlbum = parseGain(get('REPLAYGAIN_ALBUM_GAIN')) ?? tags.rgAlbum;
+  tags.rgTrackPeak = parsePeak(get('REPLAYGAIN_TRACK_PEAK')) ?? tags.rgTrackPeak;
+  tags.rgAlbumPeak = parsePeak(get('REPLAYGAIN_ALBUM_PEAK')) ?? tags.rgAlbumPeak;
+  // Opus: R128_*_GAIN is Q7.8 dB relative to -23 LUFS; ReplayGain 2 aims at -18, so add 5 dB.
+  const r128 = (k) => { const n = parseInt(get(k), 10); return Number.isFinite(n) ? Math.round((n / 256 + 5) * 100) / 100 : null; };
+  if (tags.rgTrack === null) tags.rgTrack = r128('R128_TRACK_GAIN');
+  if (tags.rgAlbum === null) tags.rgAlbum = r128('R128_ALBUM_GAIN');
+}
+
 function emptyTags() {
   return {
     title: '', artist: '', albumArtist: '', album: '', genre: '', year: 0,
     trackNo: 0, trackOf: 0, discNo: 0, discOf: 0,
     duration: 0, codec: '', bitrate: 0, sampleRate: 0, bitsPerSample: 0, channels: 0,
     rating: 0, loved: false,
+    rgTrack: null, rgAlbum: null, rgTrackPeak: null, rgAlbumPeak: null,
+    lyrics: '',
     pictures: [],
   };
 }
@@ -129,10 +153,13 @@ function applyVorbisComments(buf, tags) {
     tags.discOf = disc.of || parseInt(f('DISCTOTAL') || f('TOTALDISCS'), 10) || tags.discOf;
     tags.rating = ratingFromPercent(f('RATING')) || ratingFromFraction(f('FMPS_RATING')) || tags.rating;
     if (/^(1|true|yes)$/i.test(f('LOVED'))) tags.loved = true;
+    applyReplayGain((k) => fields[k], tags);
+    const lyr = String(fields.LYRICS || fields.UNSYNCEDLYRICS || fields['UNSYNCED LYRICS'] || '').replace(/\r\n?/g, '\n').trim();
+    if (lyr) tags.lyrics = lyr;
   } catch {
     /* a damaged comment block: keep whatever we have */
   }
   return tags;
 }
 
-module.exports = { ratingFromPercent, ratingFromFraction, ratingFromPopm, ID3V1_GENRES, genreFromIndex, normalizeId3Genre, emptyTags, parseFlacPicture, applyVorbisComments };
+module.exports = { applyReplayGain, parseGain, ratingFromPercent, ratingFromFraction, ratingFromPopm, ID3V1_GENRES, genreFromIndex, normalizeId3Genre, emptyTags, parseFlacPicture, applyVorbisComments };

@@ -40,6 +40,8 @@
     stats: s('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
     dupes: s('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
     missing: s('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.5" r=".6" fill="currentColor"/>'),
+    viz: s('<path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>'),
+    lyrics: s('<path d="M4 6h10M4 10h10M4 14h6"/><path d="M18 19V9.5l3-1"/><circle cx="16.2" cy="19" r="1.8"/>'),
     info: s('<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>'),
   };
 })();

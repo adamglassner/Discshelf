@@ -9,6 +9,8 @@ A music player for the music on your computer, from Bytehawk Studio. It takes it
 | ![Artists view](docs/screenshots/artists.png) | ![Radio](docs/screenshots/radio.png) |
 | **Up Next** | **Statistics** |
 | ![Up Next](docs/screenshots/up-next.png) | ![Statistics](docs/screenshots/statistics.png) |
+| **Lyrics** | **Visualizer** |
+| ![Lyrics](docs/screenshots/lyrics.png) | ![Visualizer](docs/screenshots/visualizer.png) |
 | **iTunes style** | **Album colors (dark)** |
 | ![iTunes style](docs/screenshots/itunes-light.png) | ![Album colors](docs/screenshots/album-colors.png) |
 
@@ -40,6 +42,10 @@ The builds aren't code-signed yet, so Windows SmartScreen may say it "protected 
 - **Playlists:** make them in the sidebar (Ctrl+N), drag songs, albums or artists onto them, drag to reorder, and import or export .m3u / .m3u8 files.
 - **Up Next:** right-click and choose **Play Next** or **Add to Up Next**; the Up Next panel (Ctrl+U) shows what's coming and lets you reorder it.
 - **Ratings and Loved:** stars and a heart for each song, saved into the files; loving a song loves it on Last.fm too.
+- **Gapless and crossfade:** songs play back to back with no gap, or fade into each other over 1 to 10 seconds (**Settings → Playback**).
+- **Volume leveling:** every song (or every album) at about the same loudness, from ReplayGain tags or Discshelf's own loudness measurement.
+- **Lyrics:** the Lyrics tab in the art pane (Ctrl+Shift+L) shows lyrics from a .lrc file, the music file or LRCLIB; synced lyrics follow along.
+- **Visualizer:** bars, wave or a ring around the album art (Ctrl+Shift+V).
 - **Sleep timer:** stop after 15 minutes to 1½ hours (with a fade), or at the end of the song or album (**Playback → Sleep Timer**).
 - **Tools:** **Statistics** (most played, listening time by month, year in review), **Duplicates** (keep the best copy) and **Missing info** (one-click fixes for missing artwork, genres, years and track numbers).
 - **Equalizer:** 10 bands, preamp and presets (button in the player bar, or **Playback → Equalizer**).
@@ -68,6 +74,8 @@ Your library and settings are kept in `%APPDATA%\Discshelf` (**Settings → Open
 | Remove from library (or from the playlist you're in) | Delete |
 | New playlist | Ctrl+N |
 | Show / hide Up Next | Ctrl+U |
+| Lyrics | Ctrl+Shift+L |
+| Visualizer | Ctrl+Shift+V |
 | Get Info | Ctrl+I |
 | Settings | Ctrl+, |
 
@@ -114,7 +122,7 @@ The Bytehawk Studio Launcher picks up the new release automatically. Its catalog
 
 ## Coming later
 
-Gapless playback and crossfade, volume leveling, lyrics, a visualizer, ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
+ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
 
 ---
 

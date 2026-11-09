@@ -10,6 +10,7 @@ const { writeTags } = require('./tags/writer');
 const { Online, sniffImage, matchTracks } = require('./online');
 const { Lastfm } = require('./lastfm');
 const { RadioBrowser, icyStripper, firstPlaylistUrl } = require('./radio');
+const { Lyrics } = require('./lyrics');
 
 const SMOKE_TEST = process.argv.includes('--smoke-test');
 const APP_ID = 'com.bytehawkstudio.discshelf';
@@ -35,6 +36,7 @@ let settingsFile = '';
 const online = new Online((url, opts) => net.fetch(url, opts));
 let lastfm = null;
 let radio = null;
+let lyrics = null;
 let radioStream = null; // AbortController of the station being played (one at a time)
 const userAgent = () => `Discshelf/${app.getVersion()} (Bytehawk Studio; https://github.com/adamglassner/discshelf)`;
 
@@ -151,6 +153,11 @@ const DEFAULT_SETTINGS = {
   accent: '', // '' = the theme's own accent color
   lastSeenVersion: '', // shows What's New once after an update
   checkUpdates: true,
+  crossfade: 0, // seconds; 0 = gapless, no crossfade
+  leveling: 'off', // off | track | album
+  levelPreamp: 0,
+  lyricsOnline: true,
+  visualizer: 'bars', // bars | wave | circle
 };
 
 function loadSettings() {
@@ -378,6 +385,8 @@ function buildMenu(name) {
       { type: 'separator' },
       { label: 'Filter Panes (Genre, Artist, Album)', type: 'checkbox', checked: settings.showFilters, click: (i) => command('showFilters', i.checked) },
       { label: 'Album Art Pane', type: 'checkbox', checked: settings.showArtPane, click: (i) => command('showArtPane', i.checked) },
+      { label: 'Lyrics', accelerator: 'CmdOrCtrl+Shift+L', click: () => command('showLyrics') },
+      { label: 'Visualizer', accelerator: 'CmdOrCtrl+Shift+V', click: () => command('visualizer') },
       { type: 'separator' },
       { label: 'Find in Library', accelerator: 'CmdOrCtrl+F', click: () => command('focusSearch') },
       { label: 'Go to Now Playing', accelerator: 'CmdOrCtrl+L', click: () => command('revealPlaying') },
@@ -406,6 +415,7 @@ function buildMenu(name) {
         ].map(([v, label]) => ({ label, type: 'radio', checked: (sleepMode || 'off') === v, click: () => command('sleep', v) })),
       },
       { label: 'Equalizer…', click: () => command('equalizer') },
+      { label: 'Crossfade & Volume Leveling…', click: () => command('settings', 'playback') },
     ],
     help: [
       { label: 'What’s New in Discshelf', click: () => command('whatsNew') },
@@ -472,6 +482,12 @@ function registerIpc() {
   ipcMain.handle('library:removeFolder', (_e, folder) => library.removeFolder(String(folder)));
   ipcMain.handle('library:removeTracks', (_e, ids) => library.removeTracks(Array.isArray(ids) ? ids : []));
   ipcMain.handle('track:played', (_e, { id, seconds }) => library.markPlayed(id, Number(seconds) || 0));
+  ipcMain.handle('track:setLoudness', (_e, { id, lufs }) => library.setLoudness(id, lufs));
+  ipcMain.handle('lyrics:get', async (_e, id) => {
+    const t = library.get(id);
+    if (!t) return { source: null };
+    return lyrics.get(t, { online: settings.lyricsOnline !== false && settings.onlineLookup !== false });
+  });
   ipcMain.handle('app:changelog', async () => {
     try { return await fs.promises.readFile(path.join(app.getAppPath(), 'CHANGELOG.md'), 'utf8'); } catch { return ''; }
   });
@@ -873,6 +889,7 @@ app.whenReady().then(() => {
   library.shouldWriteFiles = () => settings.writeTags !== false;
   library.on('progress', (p) => send('scan:progress', p));
   radio = new RadioBrowser((url, opts) => net.fetch(url, opts), userAgent());
+  lyrics = new Lyrics({ fetch: (url, opts) => net.fetch(url, opts), dataDir: app.getPath('userData'), userAgent: userAgent() });
   lastfm = new Lastfm({
     fetch: (url, opts) => net.fetch(url, opts),
     dataDir: app.getPath('userData'),
