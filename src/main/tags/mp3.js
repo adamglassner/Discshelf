@@ -1,7 +1,7 @@
 'use strict';
 // ID3v2.2/2.3/2.4 and ID3v1 tags, plus MP3 duration (Xing/Info/VBRI headers, or a CBR estimate).
 const { decodeUtf16, cleanText, parseNumberPair, parseYear, imageMimeFromData } = require('./reader');
-const { normalizeId3Genre, genreFromIndex } = require('./common');
+const { normalizeId3Genre, genreFromIndex, ratingFromPopm, ratingFromFraction } = require('./common');
 
 const MAX_ID3_SIZE = 64 * 1024 * 1024;
 
@@ -128,6 +128,9 @@ async function readId3v2(src, offset, tags) {
     if (id === 'APIC' || id === 'PIC') {
       const pic = pictureFrame(data, v22);
       if (pic) tags.pictures.push(pic);
+    } else if ((id === 'POPM' || id === 'POP') && !tags.rating) {
+      const end = data.indexOf(0);
+      if (end >= 0 && end + 1 < data.length) tags.rating = ratingFromPopm(data[end + 1]);
     } else if (id === 'TXXX' || id === 'TXX') {
       const t = userTextFrame(data);
       if (t) userText[t.key] = t.value;
@@ -137,6 +140,8 @@ async function readId3v2(src, offset, tags) {
   }
 
   const f = (...ids) => { for (const id of ids) if (frames[id]) return frames[id]; return ''; };
+  if (/^(1|true|yes)$/i.test(userText.LOVED || '')) tags.loved = true;
+  if (!tags.rating && userText.FMPS_RATING) tags.rating = ratingFromFraction(userText.FMPS_RATING);
   tags.title = f('TIT2', 'TT2') || tags.title;
   tags.artist = f('TPE1', 'TP1') || tags.artist;
   tags.albumArtist = f('TPE2', 'TP2') || userText['ALBUM ARTIST'] || userText.ALBUMARTIST || tags.albumArtist;

@@ -8,6 +8,7 @@
   const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
   const ROW_H = 28;
   const RECENT_DAYS = 30;
+  const DRAG_IDS = 'application/x-discshelf-ids'; // songs being dragged (to playlists, Up Next)
 
   // ---------------------------------------------------------------- state
 
@@ -37,6 +38,9 @@
     errorsInARow: 0,
     seeking: false,
     showRemaining: true,
+    upNext: [], // songs lined up with Play Next / Add to Up Next
+    queueSource: '', // name of the list the queue came from ("Songs", an album, a playlist)
+    playlists: [],
   };
 
   const audio = new Audio();
@@ -115,9 +119,10 @@
   function applyTheme() {
     const s = state.settings;
     const dark = s.theme === 'dark' || (s.theme !== 'light' && state.systemDark);
-    const style = s.style === 'classic' ? 'classic' : 'modern';
+    const style = ['classic', 'itunes'].includes(s.style) ? s.style : 'modern';
     document.documentElement.dataset.style = style;
-    document.documentElement.dataset.theme = style === 'classic' ? (dark ? 'classic-dark' : 'classic-light') : (dark ? 'dark' : 'light');
+    document.documentElement.dataset.theme = style === 'modern' ? (dark ? 'dark' : 'light') : `${style}-${dark ? 'dark' : 'light'}`;
+    if (mods.colors) mods.colors.update();
     const cs = getComputedStyle(document.documentElement);
     api.setTitleBar({ color: cs.getPropertyValue('--titlebar-bg').trim(), symbolColor: cs.getPropertyValue('--titlebar-fg').trim() });
   }
@@ -132,6 +137,7 @@
   function setLibrary(data) {
     state.folders = data.folders || [];
     state.tracks = data.tracks || [];
+    state.playlists = data.playlists || [];
     state.byId = new Map();
     for (const t of state.tracks) {
       t._s = fold(`${t.title} ${t.artist} ${t.albumArtist} ${t.album} ${t.genre}`);
@@ -148,6 +154,7 @@
       }
     }
     if (state.view.startsWith('folder:') && !state.folders.includes(state.view.slice(7))) state.view = 'music';
+    if (state.view.startsWith('pl:') && !mods.playlists.get(state.view.slice(3))) { state.view = 'music'; updateMode(); }
     state.artistImages = data.artists || {};
     mods.albums.invalidate();
     mods.artists.invalidate();
@@ -157,6 +164,9 @@
     if (state.view === 'albums') mods.albums.render();
     if (state.view === 'artists') mods.artists.render();
     if (state.view === 'settings') mods.settings.render();
+    if (isToolView(state.view)) mods.tools.refresh(state.view);
+    mods.queue.render();
+    updateLoveButton();
   }
 
   async function reloadLibrary() {
@@ -174,7 +184,21 @@
     { id: 'radio', label: 'Radio', icon: 'radio' },
   ];
 
+  const TOOLS = [
+    { id: 'stats', label: 'Statistics', icon: 'stats' },
+    { id: 'dupes', label: 'Duplicates', icon: 'dupes' },
+    { id: 'missing', label: 'Missing info', icon: 'missing' },
+  ];
+  const isToolView = (v) => v === 'stats' || v === 'dupes' || v === 'missing';
+  let plPos = new Map(); // position of each song in the playlist being shown
+
   function viewTracks(view) {
+    if (view.startsWith('pl:')) {
+      const pl = mods.playlists.get(view.slice(3));
+      if (!pl) return [];
+      plPos = new Map(pl.ids.map((id, i) => [id, i]));
+      return pl.ids.map((id) => state.byId.get(id)).filter(Boolean);
+    }
     if (view === 'recent') {
       const since = Date.now() - RECENT_DAYS * 86400000;
       return state.tracks.filter((t) => t.added >= since);
@@ -204,7 +228,10 @@
           ${I.folder}<span class="label">${esc(folderName(f))}</span><span class="count">${n(count)}</span></button>`;
       }).join('')
       : '<div class="side-empty">No folders yet</div>';
-    $('#btn-settings').classList.toggle('active', state.view === 'settings');
+    $('#tool-list').innerHTML = TOOLS.map((v) => `<button type="button" class="side-item${state.view === v.id ? ' active' : ''}" data-view="${v.id}" role="listitem">
+        ${I[v.icon]}<span class="label">${esc(v.label)}</span><span class="count"></span></button>`).join('');
+    mods.playlists.renderSidebar();
+    $('#btn-settings').classList.toggle('active', state.view === 'settings' || state.view === 'version');
   }
 
   function setView(view) {
@@ -225,16 +252,21 @@
     $('#tl-scroll').scrollTop = 0;
   }
 
-  const isSongView = (v) => !['albums', 'artists', 'radio', 'settings'].includes(v);
+  const PAGE_VIEWS = ['albums', 'artists', 'radio', 'settings', 'version', 'stats', 'dupes', 'missing'];
+  const isSongView = (v) => !PAGE_VIEWS.includes(v);
 
-  /** Shows the songs list, the albums grid or the settings page in the content area. */
+  /** Shows the songs list, the albums grid, a tool or the settings page in the content area. */
   function updateMode() {
-    const mode = ['albums', 'artists', 'radio', 'settings'].includes(state.view) ? state.view : 'songs';
+    const mode = isToolView(state.view) ? 'tools' : PAGE_VIEWS.includes(state.view) ? state.view : 'songs';
     $('#content').dataset.mode = mode;
     $('#albums-view').hidden = mode !== 'albums';
     $('#artists-view').hidden = mode !== 'artists';
     $('#radio-view').hidden = mode !== 'radio';
     $('#settings-view').hidden = mode !== 'settings';
+    $('#tools-view').hidden = mode !== 'tools';
+    $('#version-view').hidden = mode !== 'version';
+    if (mode === 'tools') mods.tools.render(state.view);
+    if (mode === 'version') { mods.version.render(); $('#version-view').scrollTop = 0; }
     if (mode === 'albums') mods.albums.render();
     if (mode === 'artists') mods.artists.render();
     if (mode === 'radio') mods.radio.render();
@@ -247,6 +279,7 @@
     if (state.sortByView[state.view]) return state.sortByView[state.view];
     if (state.view === 'recent') return { key: 'added', dir: -1 };
     if (state.view === 'top') return { key: 'playCount', dir: -1 };
+    if (state.view.startsWith('pl:')) return { key: 'order', dir: 1 };
     return state.settings.sort || { key: 'artist', dir: 1 };
   }
 
@@ -269,6 +302,9 @@
     playCount: (a, b) => (a.playCount || 0) - (b.playCount || 0) || (a.lastPlayed || 0) - (b.lastPlayed || 0),
     added: (a, b) => (a.added || 0) - (b.added || 0) || -SORTERS.artist(a, b),
     codec: (a, b) => cmpText(a.codec, b.codec) || SORTERS.artist(a, b),
+    order: (a, b) => (plPos.get(a.id) ?? 0) - (plPos.get(b.id) ?? 0),
+    rating: (a, b) => (a.rating || 0) - (b.rating || 0) || -SORTERS.artist(a, b),
+    loved: (a, b) => (a.loved ? 1 : 0) - (b.loved ? 1 : 0) || -SORTERS.artist(a, b),
   };
 
   function buildFilterList(tracks, keyFn) {
@@ -381,11 +417,13 @@
     { key: 'ind', label: '', width: '30px', sort: null },
     { key: 'trackNo', label: '#', width: '44px', right: true },
     { key: 'title', label: 'Title', width: 'minmax(150px, 2.4fr)' },
+    { key: 'loved', label: '', width: '28px' },
     { key: 'duration', label: 'Time', width: '62px', right: true },
     { key: 'artist', label: 'Artist', width: 'minmax(110px, 1.5fr)' },
     { key: 'album', label: 'Album', width: 'minmax(110px, 1.5fr)' },
     { key: 'genre', label: 'Genre', width: 'minmax(70px, 0.8fr)' },
     { key: 'year', label: 'Year', width: '54px', right: true },
+    { key: 'rating', label: 'Rating', width: '84px' },
     { key: 'playCount', label: 'Plays', width: '54px', right: true },
     { key: 'codec', label: 'Format', width: '72px' },
   ];
@@ -396,6 +434,12 @@
     $('#tl-head').innerHTML = COLUMNS.map((c) => {
       const active = c.key === key;
       const ind = active ? `<span class="sort-ind">${dir > 0 ? '▲' : '▼'}</span>` : '';
+      if (c.key === 'ind' && state.view.startsWith('pl:')) {
+        return `<div class="col" data-key="order" role="columnheader" title="Playlist order" aria-sort="${key === 'order' ? 'ascending' : 'none'}">${key === 'order' ? '<span class="sort-ind">▲</span>' : ''}</div>`;
+      }
+      if (c.key === 'loved') {
+        return `<div class="col love-col" data-key="loved" role="columnheader" title="Loved" aria-sort="${active ? (dir > 0 ? 'ascending' : 'descending') : 'none'}">${I.heart}</div>`;
+      }
       return `<div class="col${c.right ? ' right' : ''}" data-key="${c.key}" role="columnheader" aria-sort="${active ? (dir > 0 ? 'ascending' : 'descending') : 'none'}">${c.right ? ind : ''}${esc(c.label)}${c.right ? '' : ind}</div>`;
     }).join('');
   }
@@ -403,7 +447,7 @@
   function setSort(key) {
     if (key === 'ind') return;
     const cur = currentSort();
-    const dir = cur.key === key ? -cur.dir : (key === 'playCount' || key === 'added' ? -1 : 1);
+    const dir = key === 'order' ? 1 : cur.key === key ? -cur.dir : (['playCount', 'added', 'rating', 'loved'].includes(key) ? -1 : 1);
     const sort = { key, dir };
     if (state.view === 'music' || state.view.startsWith('folder:')) saveSettings({ sort });
     state.sortByView[state.view] = sort;
@@ -415,18 +459,22 @@
     const cls = `tl-row ${i % 2 ? 'odd' : 'even'}${playing ? ' playing' : ''}${state.selected.has(t.id) ? ' selected' : ''}`;
     const icon = playing ? (audio.paused ? 'pause' : 'speaker') : '';
     const track = t.trackNo ? String(t.trackNo) : '';
-    return `<div class="${cls}" data-i="${i}" role="row" aria-selected="${state.selected.has(t.id)}">
+    return `<div class="${cls}" data-i="${i}" role="row" draggable="true" aria-selected="${state.selected.has(t.id)}">
       <div class="c ind" data-icon="${icon}">${icon ? I[icon] : ''}</div>
       <div class="c right dim">${track}</div>
       <div class="c">${esc(t.title)}</div>
+      <div class="c love${t.loved ? ' on' : ''}" data-love title="${t.loved ? 'Loved (click to unlove)' : 'Love'}">${t.loved ? I.heartFill : I.heart}</div>
       <div class="c right dim">${t.duration ? fmtTime(t.duration) : ''}</div>
       <div class="c">${esc(t.artist)}</div>
       <div class="c">${esc(t.album)}</div>
       <div class="c dim">${esc(t.genre)}</div>
       <div class="c right dim">${t.year || ''}</div>
+      <div class="c stars" data-rating="${t.rating || 0}">${starsHtml(t.rating || 0)}</div>
       <div class="c right dim">${t.playCount || ''}</div>
       <div class="c dim">${esc(t.codec)}</div></div>`;
   }
+
+  const starsHtml = (r) => [1, 2, 3, 4, 5].map((k) => `<span class="star${k <= r ? ' on' : ''}" data-star="${k}">${k <= r ? I.starFill : I.star}</span>`).join('');
 
   let lastRange = '';
   function renderRows(force = false) {
@@ -452,7 +500,8 @@
         ? `No songs match “${state.search}”.`
         : state.view === 'top' ? 'Songs you play will show up here.'
           : state.view === 'recent' ? `Nothing added in the last ${RECENT_DAYS} days.`
-            : 'No songs here.';
+            : state.view.startsWith('pl:') ? 'This playlist is empty. Drag songs onto it in the sidebar, or right-click songs and choose Add to Playlist.'
+              : 'No songs here.';
     } else {
       msg.hidden = true;
     }
@@ -518,9 +567,78 @@
     });
 
     const rowsEl = $('#tl-rows');
+    rowsEl.addEventListener('click', (e) => {
+      const row = e.target.closest('.tl-row');
+      if (!row || e.shiftKey || e.ctrlKey || e.metaKey) return;
+      const t = state.rows[parseInt(row.dataset.i, 10)];
+      if (!t) return;
+      const star = e.target.closest('[data-star]');
+      if (star) { const r = parseInt(star.dataset.star, 10); rate([t.id], t.rating === r ? 0 : r); return; }
+      if (e.target.closest('[data-love]')) love([t.id], !t.loved);
+    });
+    // Hovering over the stars previews the rating.
+    rowsEl.addEventListener('mouseover', (e) => {
+      const star = e.target.closest('[data-star]');
+      const cell = e.target.closest('.stars');
+      for (const c of rowsEl.querySelectorAll('.stars.hover')) if (c !== cell) { c.classList.remove('hover'); c.querySelectorAll('.star').forEach((s) => s.classList.remove('pre')); }
+      if (!star || !cell) return;
+      cell.classList.add('hover');
+      const k = parseInt(star.dataset.star, 10);
+      cell.querySelectorAll('.star').forEach((s) => s.classList.toggle('pre', parseInt(s.dataset.star, 10) <= k));
+    });
+    rowsEl.addEventListener('mouseleave', () => { for (const c of rowsEl.querySelectorAll('.stars.hover')) { c.classList.remove('hover'); c.querySelectorAll('.star').forEach((s) => s.classList.remove('pre')); } });
+
+    // Drag songs onto playlists or Up Next; in a playlist (in playlist order), drag to reorder.
+    let dragIds = null;
+    rowsEl.addEventListener('dragstart', (e) => {
+      const row = e.target.closest('.tl-row');
+      if (!row) return;
+      const t = state.rows[parseInt(row.dataset.i, 10)];
+      dragIds = state.selected.has(t.id) ? selectedIds() : [t.id];
+      if (!state.selected.has(t.id)) selectIndex(parseInt(row.dataset.i, 10));
+      e.dataTransfer.effectAllowed = 'copyMove';
+      e.dataTransfer.setData(DRAG_IDS, JSON.stringify(dragIds));
+      e.dataTransfer.setData('text/plain', dragIds.map((id) => state.byId.get(id)?.title).join('\n'));
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = dragIds.length === 1 ? state.byId.get(dragIds[0]).title : `${n(dragIds.length)} songs`;
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, -10, -6);
+      setTimeout(() => ghost.remove(), 0);
+    });
+    rowsEl.addEventListener('dragend', () => { dragIds = null; clearDropMarks(); });
+    const canReorder = () => state.view.startsWith('pl:') && currentSort().key === 'order' && !state.search
+      && state.filter.genre === null && state.filter.artist === null && state.filter.album === null;
+    const clearDropMarks = () => rowsEl.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
+    rowsEl.addEventListener('dragover', (e) => {
+      if (!dragIds || !canReorder()) return;
+      const row = e.target.closest('.tl-row');
+      if (!row) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      clearDropMarks();
+      const r = row.getBoundingClientRect();
+      row.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+    });
+    rowsEl.addEventListener('drop', (e) => {
+      if (!dragIds || !canReorder()) return;
+      const row = e.target.closest('.tl-row');
+      if (!row) return;
+      e.preventDefault();
+      const r = row.getBoundingClientRect();
+      const i = parseInt(row.dataset.i, 10) + (e.clientY < r.top + r.height / 2 ? 0 : 1);
+      const before = state.rows[i];
+      const pl = mods.playlists.get(state.view.slice(3));
+      const to = before ? pl.ids.indexOf(before.id) : pl.ids.length;
+      clearDropMarks();
+      mods.playlists.reorder(pl.id, dragIds, to);
+      dragIds = null;
+    });
+
     rowsEl.addEventListener('mousedown', (e) => {
       const row = e.target.closest('.tl-row');
       if (!row) return;
+      if (e.button === 0 && !e.shiftKey && !e.ctrlKey && state.selected.has(state.rows[parseInt(row.dataset.i, 10)].id) && state.selected.size > 1) return; // may be the start of a drag
       const i = parseInt(row.dataset.i, 10);
       if (e.button === 2 && state.selected.has(state.rows[i].id)) return; // keep multi-selection for the menu
       selectIndex(i, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
@@ -533,7 +651,14 @@
       const row = e.target.closest('.tl-row');
       if (!row) return;
       e.preventDefault();
-      api.trackMenu(selectedIds(), e.clientX, e.clientY);
+      api.trackMenu(selectedIds(), e.clientX, e.clientY, mods.playlists.idOfView(state.view));
+    });
+    // A click (without dragging) on one of several selected songs selects just that song.
+    rowsEl.addEventListener('mouseup', (e) => {
+      const row = e.target.closest('.tl-row');
+      if (!row || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || state.selected.size < 2) return;
+      if (e.target.closest('[data-star], [data-love]')) return;
+      selectIndex(parseInt(row.dataset.i, 10));
     });
 
     $('#tracklist').addEventListener('keydown', (e) => {
@@ -553,7 +678,8 @@
           return;
         case 'Delete':
           e.preventDefault();
-          confirmRemove(selectedIds());
+          if (state.view.startsWith('pl:') && selectedIds().length) mods.playlists.removeFrom(state.view.slice(3), selectedIds());
+          else confirmRemove(selectedIds());
           return;
         case 'a':
           if (e.ctrlKey || e.metaKey) {
@@ -576,11 +702,13 @@
 
   function renderStatus() {
     const rows = state.rows;
-    if (!state.tracks.length && state.view !== 'radio' && state.view !== 'settings') { $('#status-text').textContent = 'Your library is empty'; return; }
+    if (!state.tracks.length && !['radio', 'settings', 'version'].includes(state.view)) { $('#status-text').textContent = 'Your library is empty'; return; }
     if (state.view === 'albums') { $('#status-text').textContent = mods.albums.status(); return; }
     if (state.view === 'artists') { $('#status-text').textContent = mods.artists.status(); return; }
     if (state.view === 'radio') { $('#status-text').textContent = state.radio ? `Listening to ${state.radio.station.name}` : 'Live radio from around the world'; return; }
     if (state.view === 'settings') { $('#status-text').textContent = `${plural(state.tracks.length, 'song', 'songs')} in your library`; return; }
+    if (isToolView(state.view)) { $('#status-text').textContent = mods.tools.status(state.view); return; }
+    if (state.view === 'version') { $('#status-text').textContent = mods.version.status(); return; }
     let dur = 0; let size = 0;
     for (const t of rows) { dur += t.duration || 0; size += t.size || 0; }
     let text = `${plural(rows.length, 'song', 'songs')}, ${fmtTotal(dur)}, ${fmtSize(size)}`;
@@ -620,6 +748,7 @@
     if (t.trackNo) rows.push(['Track', t.trackOf ? `${t.trackNo} of ${t.trackOf}` : t.trackNo]);
     if (t.discNo && (t.discOf > 1 || t.discNo > 1)) rows.push(['Disc', t.discOf ? `${t.discNo} of ${t.discOf}` : t.discNo]);
     if (t.duration) rows.push(['Length', fmtTime(t.duration)]);
+    if (t.rating) rows.push(['Rating', '★'.repeat(t.rating)]);
     const fl = formatLine(t);
     if (fl) rows.push(['Format', esc(fl)]);
     rows.push(['Plays', t.playCount || 0]);
@@ -682,20 +811,30 @@
     state.pos = state.order.indexOf(startQueueIndex);
   }
 
+  function viewLabel(v = state.view) {
+    if (v.startsWith('pl:')) return mods.playlists.get(v.slice(3))?.name || 'the playlist';
+    if (v.startsWith('folder:')) return folderName(v.slice(7));
+    if (state.filter.album) return state.filter.album;
+    if (state.filter.artist) return state.filter.artist;
+    return (VIEWS.find((x) => x.id === v) || { label: 'your library' }).label;
+  }
+
   /** Plays the current list starting at row i (the queue is the list as shown). */
   function playRows(i) {
     if (!state.rows.length) return;
     i = Math.max(0, Math.min(i, state.rows.length - 1));
     state.queue = state.rows.map((t) => t.id);
+    setQueueSource(state.search ? `“${state.search}”` : viewLabel());
     buildOrder(i);
     state.errorsInARow = 0;
     loadAndPlay(state.byId.get(state.queue[i]));
   }
 
   /** Plays a list of song ids from position `start` (-1 = random start). shuffle: force a shuffled order. */
-  function playQueue(ids, start = 0, { shuffle = false } = {}) {
+  function playQueue(ids, start = 0, { shuffle = false, source = '' } = {}) {
     state.queue = ids.filter((id) => state.byId.has(id));
     if (!state.queue.length) return;
+    setQueueSource(source || sourceFor(state.queue));
     if (start < 0) start = Math.floor(Math.random() * state.queue.length);
     start = Math.min(start, state.queue.length - 1);
     state.order = shuffle || state.settings.shuffle ? shuffledOrder(state.queue.length, start) : [...Array(state.queue.length).keys()];
@@ -707,9 +846,60 @@
   function playIds(ids) {
     const list = ids.map((id) => state.byId.get(id)).filter(Boolean);
     if (!list.length) return;
-    if (list.length === 1) { playRows(state.rowIndex.get(list[0].id) ?? 0); return; }
+    if (list.length === 1 && isSongView(state.view) && state.rowIndex.has(list[0].id)) { playRows(state.rowIndex.get(list[0].id)); return; }
     state.queue = list.map((t) => t.id);
+    setQueueSource(sourceFor(state.queue));
     buildOrder(state.settings.shuffle ? Math.floor(Math.random() * list.length) : 0);
+    loadAndPlay(state.byId.get(state.queue[state.order[state.pos]]));
+  }
+
+  function setQueueSource(name) {
+    state.queueSource = name;
+    saveSettings({ queueSource: name });
+    mods.queue.render();
+  }
+
+  /** "Album — Artist" when the songs are one album, else the view they came from. */
+  function sourceFor(ids) {
+    const ts = ids.map((id) => state.byId.get(id)).filter(Boolean);
+    if (ts.length && ts.every((t) => t.album && t.album === ts[0].album)) return ts[0].album;
+    if (ts.length && ts.every((t) => (t.albumArtist || t.artist) === (ts[0].albumArtist || ts[0].artist))) return ts[0].albumArtist || ts[0].artist || 'your songs';
+    return isSongView(state.view) ? viewLabel() : 'your songs';
+  }
+
+  /** The song that will play next (Up Next first), or null. */
+  function peekNext() {
+    const up = mods.queue.peek();
+    if (up) return state.byId.get(up);
+    if (!state.queue.length) return null;
+    const pos = state.pos + 1;
+    if (pos < state.order.length) return state.byId.get(state.queue[state.order[pos]]);
+    return state.settings.repeat === 'all' ? state.byId.get(state.queue[state.order[0]]) : null;
+  }
+
+  /** For the sleep timer: is the song that's playing the last one of its album? */
+  function isLastOfAlbum() {
+    const t = state.current;
+    if (!t) return true;
+    const nx = peekNext();
+    return !nx || !t.album || nx.album !== t.album || (nx.albumArtist || nx.artist) !== (t.albumArtist || t.artist);
+  }
+
+  /** Plays one song now without changing the list it's part of (used by Up Next). */
+  function playTrack(id) {
+    const t = state.byId.get(id);
+    if (!t) return;
+    state.errorsInARow = 0;
+    if (!state.queue.length) { state.queue = [id]; state.order = [0]; state.pos = 0; setQueueSource(t.album || 'Up Next'); }
+    loadAndPlay(t);
+  }
+
+  /** Skips forward (or back) `offset` songs in the list that's playing. */
+  function jumpInQueue(offset) {
+    if (!state.queue.length) return;
+    let pos = state.pos + offset;
+    if (pos >= state.order.length) pos %= state.order.length;
+    state.pos = Math.max(0, pos);
     loadAndPlay(state.byId.get(state.queue[state.order[state.pos]]));
   }
 
@@ -753,6 +943,7 @@
     }
     updateNowPlaying();
     saveSettings({ lastTrackId: t.id, lastPosition: at });
+    mods.queue.render();
   }
 
   function stop() {
@@ -763,7 +954,11 @@
   }
 
   function advance(step, { fromEnded = false } = {}) {
-    if (!state.queue.length) return;
+    if (step > 0) {
+      const up = mods.queue.take();
+      if (up) { state.errorsInARow = 0; loadAndPlay(state.byId.get(up)); return; }
+    }
+    if (!state.queue.length) { if (fromEnded) stop(); return; }
     let pos = state.pos + step;
     if (pos >= state.order.length) {
       if (state.settings.repeat !== 'all' && fromEnded) { stop(); return; }
@@ -796,8 +991,11 @@
       return;
     }
     if (!state.current) {
-      const ids = selectedIds();
-      playRows(ids.length ? state.rowIndex.get(ids[0]) : 0);
+      const up = mods.queue.take();
+      if (up) { playTrack(up); return; }
+      const ids = isSongView(state.view) ? selectedIds() : [];
+      if (isSongView(state.view)) playRows(ids.length ? state.rowIndex.get(ids[0]) : 0);
+      else if (state.tracks.length) { setView('music'); playRows(0); }
       return;
     }
     if (audio.paused) audio.play().catch(() => {}); else audio.pause();
@@ -846,6 +1044,8 @@
         if (img) img.onerror = () => { art.innerHTML = I.radio; };
       }
       $('#seek').disabled = true;
+      $('#btn-love').hidden = true;
+      mods.colors.update();
       document.title = `${r.title || st.name} · Discshelf`;
       updatePlayButton();
       updateTime();
@@ -861,6 +1061,8 @@
       $('#fp-sub').textContent = state.tracks.length ? 'Double-click a song to play it' : 'Add music to get started';
       art.innerHTML = I.disc;
       $('#seek').disabled = true;
+      $('#btn-love').hidden = true;
+      mods.colors.update();
       document.title = 'Discshelf';
       return;
     }
@@ -878,6 +1080,8 @@
     mods.albums.updatePlaying();
     mods.artists.updatePlaying();
     if (state.artMode === 'playing') renderArtPane();
+    updateLoveButton();
+    mods.colors.update();
 
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -885,6 +1089,39 @@
         artwork: url ? [{ src: url, sizes: '512x512' }] : [],
       });
     }
+  }
+
+  function updateLoveButton() {
+    const b = $('#btn-love');
+    const t = state.current;
+    b.hidden = !t || !!state.radio;
+    if (!t) return;
+    b.innerHTML = t.loved ? I.heartFill : I.heart;
+    b.classList.toggle('on', !!t.loved);
+    b.setAttribute('aria-pressed', String(!!t.loved));
+    b.title = t.loved ? 'Loved (click to unlove)' : 'Love this song';
+  }
+
+  // ---------------------------------------------------------------- ratings + loved
+
+  function refreshTrackMarks() {
+    renderRows(true);
+    if (state.view === 'albums') mods.albums.render();
+    if (state.view === 'artists') mods.artists.render();
+    updateLoveButton();
+    renderArtPane();
+  }
+
+  async function rate(ids, rating) {
+    for (const id of ids) { const t = state.byId.get(id); if (t) t.rating = rating; }
+    if (currentSort().key === 'rating') recompute(); else refreshTrackMarks();
+    try { await api.rate(ids, rating); } catch (err) { toast(String(err.message || err), 'error'); }
+  }
+
+  async function love(ids, loved) {
+    for (const id of ids) { const t = state.byId.get(id); if (t) t.loved = loved; }
+    if (currentSort().key === 'loved') recompute(); else refreshTrackMarks();
+    try { await api.love(ids, loved); } catch (err) { toast(String(err.message || err), 'error'); }
   }
 
   function setRangePct(el, pct) { el.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`); }
@@ -913,7 +1150,7 @@
     if (state.counted || !state.current) return;
     state.counted = true;
     const t = state.current;
-    api.markPlayed(t.id).then((r) => {
+    api.markPlayed(t.id, 0).then((r) => { // 0 = count the whole song as listening time
       if (!r) return;
       t.playCount = r.playCount;
       t.lastPlayed = r.lastPlayed;
@@ -1014,6 +1251,7 @@
     audio.addEventListener('ended', () => {
       if (state.radio) { toast(`${state.radio.station.name} stopped broadcasting.`); updatePlayButton(); return; }
       countPlay();
+      if (mods.sleep.onEnded()) { updatePlayButton(); updateRowStates(); return; }
       if (state.settings.repeat === 'one') {
         state.play = { id: state.current.id, startedAt: 0, listened: 0, lastPos: 0, scrobbled: false };
         audio.currentTime = 0; audio.play().catch(() => {}); state.counted = false; return;
@@ -1187,7 +1425,7 @@
       <h2>Discshelf</h2>
       <p>Version ${esc(v)}<br>A music player for the music on your computer.</p>
       <p>© ${new Date().getFullYear()} Bytehawk Studio</p>
-      <div class="actions"><button type="button" class="btn primary" data-result="ok">Close</button></div>`);
+      <div class="actions"><button type="button" class="btn" data-result="new">What’s new</button><button type="button" class="btn primary" data-result="ok">Close</button></div>`).then((r) => { if (r === 'new') setView('version'); });
   }
 
   function shortcuts() {
@@ -1196,7 +1434,8 @@
       ['Volume up / down', '<kbd>Ctrl</kbd> <kbd>↑</kbd> / <kbd>Ctrl</kbd> <kbd>↓</kbd>'], ['Play selected song', '<kbd>Enter</kbd>'],
       ['Search', '<kbd>Ctrl</kbd> <kbd>F</kbd>'], ['Go to the song that’s playing', '<kbd>Ctrl</kbd> <kbd>L</kbd>'],
       ['Add a folder', '<kbd>Ctrl</kbd> <kbd>O</kbd>'], ['Add files', '<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd>'],
-      ['Rescan library', '<kbd>F5</kbd>'], ['Remove from library', '<kbd>Delete</kbd>'], ['Select all', '<kbd>Ctrl</kbd> <kbd>A</kbd>'],
+      ['Rescan library', '<kbd>F5</kbd>'], ['Remove from library (or from the playlist)', '<kbd>Delete</kbd>'], ['Select all', '<kbd>Ctrl</kbd> <kbd>A</kbd>'],
+      ['New playlist', '<kbd>Ctrl</kbd> <kbd>N</kbd>'], ['Show Up Next', '<kbd>Ctrl</kbd> <kbd>U</kbd>'], ['Get Info', '<kbd>Ctrl</kbd> <kbd>I</kbd>'],
     ];
     modal(`<h2>Keyboard shortcuts</h2><table>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table>
       <div class="actions"><button type="button" class="btn primary" data-result="ok">Close</button></div>`);
@@ -1316,6 +1555,19 @@
       case 'shortcuts': shortcuts(); break;
       case 'playIds': playIds(arg); break;
       case 'confirmRemove': confirmRemove(arg); break;
+      case 'newPlaylist': mods.playlists.create(Array.isArray(arg) ? arg : currentSelection()); break;
+      case 'addToPlaylist': mods.playlists.addTo(arg.id, arg.ids); break;
+      case 'removeFromPlaylist': mods.playlists.removeFrom(arg.id, arg.ids); break;
+      case 'renamePlaylist': mods.playlists.rename(arg); break;
+      case 'deletePlaylist': mods.playlists.remove(arg); break;
+      case 'playNext': mods.queue.playNext(arg); break;
+      case 'addUpNext': mods.queue.add(arg); break;
+      case 'toggleQueue': mods.queue.toggle(); break;
+      case 'rate': rate(arg.ids, arg.rating); break;
+      case 'love': love(arg.ids, arg.loved); break;
+      case 'sleep': mods.sleep.set(arg); break;
+      case 'whatsNew': setView('version'); break;
+      case 'checkUpdates': setView('version'); mods.version.check(); break;
       default: break;
     }
   }
@@ -1330,6 +1582,9 @@
       if (ctrl && e.key.toLowerCase() === 'o') { e.preventDefault(); if (e.shiftKey) addFiles(); else addFolder(); return; }
       if (e.key === 'F5') { e.preventDefault(); api.rescan(); return; }
       if (ctrl && e.key === ',') { e.preventDefault(); setView('settings'); return; }
+      if (ctrl && e.key.toLowerCase() === 'n') { e.preventDefault(); mods.playlists.create(currentSelection()); return; }
+      if (ctrl && e.key.toLowerCase() === 'u') { e.preventDefault(); mods.queue.toggle(); return; }
+      if (e.key === 'Escape' && !$('#queue-panel').hidden && !inInput) { e.preventDefault(); mods.queue.toggle(false); return; }
       if (inInput) return;
       if (ctrl && e.key.toLowerCase() === 'i') {
         e.preventDefault();
@@ -1386,6 +1641,8 @@
     }
 
     $('#views').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
+    $('#tool-list').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
+    $('#btn-love').addEventListener('click', () => { if (state.current) love([state.current.id], !state.current.loved); });
     $('#folder-list').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
     $('#btn-manage-folders').addEventListener('click', () => setView('settings'));
     $('#btn-settings').innerHTML = `${I.gear}<span class="label">Settings</span>`;
@@ -1430,11 +1687,36 @@
     isInside, state, audio, saveSettings, setAppearance, setView, playQueue, reloadLibrary, renderStatus, renderArtPane,
     playRadio, renderSidebar: () => renderSidebar(), clearSearch: () => { $('#search').value = ''; state.search = ''; recompute(); },
     shortcuts, getInfo: (ids) => getInfo(ids), findMissingArt: () => findMissingArt(),
+    recompute: () => recompute(), currentSelection: () => currentSelection(), playTrack, jumpInQueue, isLastOfAlbum,
+    revealTrack: (id) => revealTrack(id), rate: (ids, r) => rate(ids, r), love: (ids, l) => love(ids, l), formatLine,
     onEqChange: () => { updateEqButton(); mods.settings.refreshEq(); },
   };
 
   function getInfo(ids) {
     if (ids && ids.length) mods.info.open(ids);
+  }
+
+  /** The songs selected in whichever view is showing. */
+  function currentSelection() {
+    if (state.view === 'albums') return mods.albums.selectedIds();
+    if (state.view === 'artists') return mods.artists.selectedIds();
+    return isSongView(state.view) ? selectedIds() : [];
+  }
+
+  /** Shows a song in the Songs list, selected. */
+  function revealTrack(id) {
+    if (!state.byId.has(id)) return;
+    if (!state.rowIndex.has(id)) {
+      state.search = ''; $('#search').value = '';
+      state.filter = { genre: null, artist: null, album: null };
+      recompute();
+    }
+    const i = state.rowIndex.get(id);
+    if (i === undefined) return;
+    selectIndex(i);
+    const sc = $('#tl-scroll');
+    sc.scrollTop = Math.max(0, i * ROW_H - sc.clientHeight / 2);
+    $('#tracklist').focus();
   }
 
   function updateEqButton() {
@@ -1473,8 +1755,19 @@
     mods.eq = window.DSModules.eq(ctx);
     mods.info = window.DSModules.info(ctx);
     mods.settings = window.DSModules.settings(ctx);
+    mods.queue = window.DSModules.queue(ctx);
+    mods.playlists = window.DSModules.playlists(ctx);
+    mods.tools = window.DSModules.tools(ctx);
+    mods.sleep = window.DSModules.sleep(ctx);
+    mods.colors = window.DSModules.colors(ctx);
+    mods.version = window.DSModules.version(ctx);
     ctx.albums = mods.albums;
+    ctx.artists = mods.artists;
     ctx.eq = mods.eq;
+    ctx.colors = mods.colors;
+    ctx.version = mods.version;
+    state.upNext = Array.isArray(settings.upNext) ? settings.upNext.slice() : [];
+    state.queueSource = settings.queueSource || '';
     mods.eq.init();
     updateEqButton();
     setupChrome();
@@ -1482,6 +1775,12 @@
     mods.artists.setup();
     mods.radio.setup();
     mods.settings.setup();
+    mods.queue.setup();
+    mods.playlists.setup();
+    mods.tools.setup();
+    mods.sleep.setup();
+    mods.version.setup();
+    applyTheme();
     setupFilters();
     setupTrackList();
     setupAudio();
@@ -1497,6 +1796,7 @@
     if (last) {
       const i = state.rowIndex.get(last.id);
       state.queue = state.rows.map((t) => t.id);
+      state.queueSource = 'Songs';
       if (i !== undefined) buildOrder(i); else { state.queue = [last.id]; buildOrder(0); }
       loadAndPlay(last, { autoplay: false, at: settings.lastPosition || 0 });
     } else {
@@ -1506,7 +1806,8 @@
 
     api.onCommand(runCommand);
     api.onScanProgress(onScanProgress);
-    api.onLibraryChanged(() => reloadLibrary());
+    api.onLibraryChanged((c) => { if (!(c && c.quiet)) reloadLibrary(); });
+    api.onToast((m) => (typeof m === 'string' ? toast(m) : toast(m.text, m.error ? 'error' : '')));
     api.onSystemTheme((dark) => { state.systemDark = dark; applyTheme(); });
     api.onRadioTitle(({ id, title }) => {
       if (!state.radio || state.radio.station.id !== id || title === null) return;
@@ -1518,8 +1819,9 @@
       if (state.radio && state.radio.station.id === id) toast(`${state.radio.station.name}: ${message}`, 'error');
     });
     updateMode();
+    if (mods.version.onStart()) setView('version');
     window.__discshelfReady = true;
-    window.__discshelfTest = { level: () => mods.eq.level(), state };
+    window.__discshelfTest = { level: () => mods.eq.level(), state, mods, runCommand };
   }
 
   start().catch((err) => {

@@ -71,9 +71,14 @@ window.DSModules.settings = (ctx) => {
           <div class="style-tiles">
             ${styleTile('modern', 'Modern', 'Clean and flat')}
             ${styleTile('classic', 'Classic', 'Songbird’s glossy look and colors')}
+            ${styleTile('itunes', 'iTunes', 'Bright white, like iTunes 12')}
           </div>
           <div class="set-row"><span class="set-text"><span class="set-label">Light or dark</span></span>
             ${seg('mode', s.theme || 'system', [['system', 'Follow Windows'], ['light', 'Light'], ['dark', 'Dark']])}</div>
+          <div class="set-row"><span class="set-text"><span class="set-label">Accent color</span>
+            <span class="set-hint">Used for buttons, the seek bar and the song that’s playing.</span></span>
+            <div class="swatches" role="radiogroup">${ctx.colors.ACCENTS.map(([c, label]) => `<button type="button" class="swatch${c ? '' : ' theme'}" role="radio" data-accent="${c}" aria-checked="${(s.accent || '') === c}" title="${label}" style="${c ? `--sw:${c}` : ''}"></button>`).join('')}</div></div>
+          ${toggle('set-albumcolors', !!s.albumColors, 'Album colors', 'Tint Discshelf with the colors of the album that’s playing.')}
         </section>
 
         <section class="set-card">
@@ -119,7 +124,9 @@ window.DSModules.settings = (ctx) => {
             <div><div class="set-label">Discshelf ${esc(state.info.version || '')}</div>
             <div class="set-hint">© ${new Date().getFullYear()} Bytehawk Studio</div></div>
           </div>
+          ${toggle('set-checkupdates', s.checkUpdates !== false, 'Check for updates', 'Asks GitHub for the latest version when Discshelf starts. Updates are installed from the Bytehawk Studio Launcher.')}
           <div class="set-buttons">
+            <button type="button" class="btn" id="set-version">Version &amp; what’s new</button>
             <button type="button" class="btn" id="set-shortcuts">Keyboard shortcuts</button>
             <button type="button" class="btn" id="set-data">Open data folder</button>
           </div>
@@ -164,6 +171,8 @@ window.DSModules.settings = (ctx) => {
       const t = e.target;
       const style = t.closest('.style-tile[data-style]');
       if (style) { ctx.setAppearance({ style: style.dataset.style }); render(); return; }
+      const acc = t.closest('[data-accent]');
+      if (acc) { ctx.saveSettings({ accent: acc.dataset.accent }); ctx.colors.update(); render(); return; }
       const mode = t.closest('.seg [data-mode]');
       if (mode) { ctx.setAppearance({ theme: mode.dataset.mode }); render(); return; }
       const rm = t.closest('[data-remove-folder]');
@@ -181,6 +190,7 @@ window.DSModules.settings = (ctx) => {
         case 'set-rescan': api.rescan(); break;
         case 'set-eq': ctx.eq.open(); break;
         case 'set-shortcuts': ctx.shortcuts(); break;
+        case 'set-version': ctx.setView('version'); break;
         case 'set-data': api.openDataFolder(); break;
         case 'set-findart':
           if (artJob) { api.cancelFindArt(); break; }
@@ -225,6 +235,8 @@ window.DSModules.settings = (ctx) => {
       if (id === 'set-online') { ctx.saveSettings({ onlineLookup: e.target.checked }); render(); }
       if (id === 'set-scrobble') ctx.saveSettings({ scrobble: e.target.checked });
       if (id === 'set-writetags') { ctx.saveSettings({ writeTags: e.target.checked }); refreshPending(); }
+      if (id === 'set-albumcolors') { ctx.saveSettings({ albumColors: e.target.checked }); ctx.colors.update(); }
+      if (id === 'set-checkupdates') ctx.saveSettings({ checkUpdates: e.target.checked });
     });
 
     api.onTagProgress((p) => {

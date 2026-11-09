@@ -32,6 +32,7 @@ window.DSModules.eq = (ctx) => {
   let pre = null;
   let filters = [];
   let analyser = null;
+  let master = null;
 
   /** Builds the audio graph once. Must run before the first song plays. */
   function init() {
@@ -53,7 +54,9 @@ window.DSModules.eq = (ctx) => {
       let node = src.connect(pre);
       for (const f of filters) node = node.connect(f);
       node.connect(analyser);
-      analyser.connect(ac.destination);
+      master = ac.createGain();
+      analyser.connect(master);
+      master.connect(ac.destination);
       ctx.audio.addEventListener('play', () => { if (ac.state !== 'running') ac.resume(); });
       apply();
     } catch (err) {
@@ -63,6 +66,18 @@ window.DSModules.eq = (ctx) => {
   }
 
   const dbToGain = (db) => 10 ** (db / 20);
+
+  /** Fades the whole output to `value` (0–1) over `seconds`; used by the sleep timer. */
+  function setMaster(value, seconds = 0) {
+    if (ac && master) {
+      const t = ac.currentTime;
+      master.gain.cancelScheduledValues(t);
+      master.gain.setValueAtTime(master.gain.value, t);
+      if (seconds > 0) master.gain.linearRampToValueAtTime(value, t + seconds); else master.gain.setValueAtTime(value, t);
+      return true;
+    }
+    return false;
+  }
 
   function apply() {
     if (!ac) return;
@@ -174,5 +189,5 @@ window.DSModules.eq = (ctx) => {
     return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)}`;
   }
 
-  return { init, apply, open, summary, level, PRESETS, BANDS };
+  return { init, apply, open, summary, level, setMaster, analyser: () => analyser, PRESETS, BANDS };
 };

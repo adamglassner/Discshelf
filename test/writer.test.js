@@ -34,7 +34,7 @@ function probeTags(file) {
 
 const FIELDS = {
   title: 'Nouveau Tïtle ✓', artist: 'Writer Artist', albumArtist: 'Writer Album Artist', album: 'Written Album',
-  genre: 'Jazz', year: 1999, trackNo: 7, trackOf: 12, discNo: 2, discOf: 3,
+  genre: 'Jazz', year: 1999, trackNo: 7, trackOf: 12, discNo: 2, discOf: 3, rating: 4, loved: true,
 };
 
 (async () => {
@@ -101,9 +101,11 @@ const FIELDS = {
       }
 
       // 3) clearing a value removes it
-      await writeTags(f, { genre: '', trackOf: 0 });
+      await writeTags(f, { genre: '', trackOf: 0, rating: 2, loved: false });
       const t3 = await readTags(f);
       assert.strictEqual(t3.genre, '', 'genre cleared');
+      assert.strictEqual(t3.rating, 2, 'rating changed');
+      assert.strictEqual(t3.loved, false, 'loved cleared');
       assert.strictEqual(t3.trackNo, 7, 'track number still there');
       assert.ok(!fs.readdirSync(dir).some((x) => x.endsWith('.discshelf-tmp')), 'no temp files left behind');
       console.log(`ok   ${name}`);

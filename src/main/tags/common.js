@@ -36,11 +36,34 @@ function normalizeId3Genre(raw) {
   return s;
 }
 
+/** RATING=0–100 (some taggers write 1–5). */
+function ratingFromPercent(v) {
+  const n = parseFloat(v);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n <= 5 && Number.isInteger(n)) return n;
+  return Math.max(1, Math.min(5, Math.round(n / 20)));
+}
+/** FMPS_RATING=0.0–1.0 */
+function ratingFromFraction(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.min(5, Math.round(n * 5))) : 0;
+}
+/** ID3 POPM rating byte (0–255, as Windows Media Player writes it) → 0–5 stars. */
+function ratingFromPopm(b) {
+  if (!b) return 0;
+  if (b < 32) return 1;
+  if (b < 96) return 2;
+  if (b < 160) return 3;
+  if (b < 224) return 4;
+  return 5;
+}
+
 function emptyTags() {
   return {
     title: '', artist: '', albumArtist: '', album: '', genre: '', year: 0,
     trackNo: 0, trackOf: 0, discNo: 0, discOf: 0,
     duration: 0, codec: '', bitrate: 0, sampleRate: 0, bitsPerSample: 0, channels: 0,
+    rating: 0, loved: false,
     pictures: [],
   };
 }
@@ -104,10 +127,12 @@ function applyVorbisComments(buf, tags) {
     tags.trackOf = track.of || parseInt(f('TRACKTOTAL') || f('TOTALTRACKS'), 10) || tags.trackOf;
     tags.discNo = disc.no || tags.discNo;
     tags.discOf = disc.of || parseInt(f('DISCTOTAL') || f('TOTALDISCS'), 10) || tags.discOf;
+    tags.rating = ratingFromPercent(f('RATING')) || ratingFromFraction(f('FMPS_RATING')) || tags.rating;
+    if (/^(1|true|yes)$/i.test(f('LOVED'))) tags.loved = true;
   } catch {
     /* a damaged comment block: keep whatever we have */
   }
   return tags;
 }
 
-module.exports = { ID3V1_GENRES, genreFromIndex, normalizeId3Genre, emptyTags, parseFlacPicture, applyVorbisComments };
+module.exports = { ratingFromPercent, ratingFromFraction, ratingFromPopm, ID3V1_GENRES, genreFromIndex, normalizeId3Genre, emptyTags, parseFlacPicture, applyVorbisComments };

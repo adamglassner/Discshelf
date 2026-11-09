@@ -80,7 +80,7 @@ window.DSModules.artists = (ctx) => {
   function listRow(a, i) {
     const url = photo(a);
     const albumsN = a.albums.length;
-    return `<button type="button" class="ar-item${a.key === selectedKey ? ' selected' : ''}" data-i="${i}" role="option" aria-selected="${a.key === selectedKey}">
+    return `<button type="button" class="ar-item${a.key === selectedKey ? ' selected' : ''}" data-i="${i}" role="option" aria-selected="${a.key === selectedKey}" draggable="true">
       <span class="ar-thumb" data-name="${esc(a.name)}">${url ? `<img src="${esc(url)}" alt="" loading="lazy">` : I.artists}</span>
       <span class="ar-text"><span class="ar-name">${esc(a.name || 'Unknown Artist')}</span>
       <span class="ar-count">${plural(albumsN, 'album', 'albums')}, ${plural(a.tracks.length, 'song', 'songs')}</span></span></button>`;
@@ -246,6 +246,12 @@ window.DSModules.artists = (ctx) => {
     list.addEventListener('dblclick', (e) => {
       const it = e.target.closest('.ar-item');
       if (it) ctx.playQueue(shown[parseInt(it.dataset.i, 10)].ids, 0);
+    });
+    list.addEventListener('dragstart', (e) => {
+      const it = e.target.closest('.ar-item');
+      if (!it) return;
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('application/x-discshelf-ids', JSON.stringify(shown[parseInt(it.dataset.i, 10)].ids));
     });
     list.addEventListener('keydown', (e) => {
       const i = shown.findIndex((a) => a.key === selectedKey);

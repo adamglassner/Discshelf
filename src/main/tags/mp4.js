@@ -1,7 +1,7 @@
 'use strict';
 // MP4 / M4A: walks the box tree (never reads mdat), mvhd for duration, stsd for the codec, ilst for tags.
 const { cleanText, parseYear, imageMimeFromData } = require('./reader');
-const { genreFromIndex } = require('./common');
+const { genreFromIndex, ratingFromPercent } = require('./common');
 
 const MAX_MOOV = 128 * 1024 * 1024;
 const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'udta', 'ilst', 'edts', 'dinf']);
@@ -28,6 +28,19 @@ function* boxes(buf, start, end) {
 
 function parseIlst(buf, start, end, tags) {
   for (const item of boxes(buf, start, end)) {
+    if (item.type === '----') {
+      // Freeform: mean / name / data (Discshelf keeps RATING and LOVED here).
+      let name = '';
+      let value = '';
+      for (const c of boxes(buf, item.start, item.end)) {
+        if (c.type === 'name') name = buf.toString('utf8', c.start + 4, c.end);
+        if (c.type === 'data') value = buf.toString('utf8', c.start + 8, c.end);
+      }
+      const key = name.toUpperCase();
+      if (key === 'RATING') tags.rating = ratingFromPercent(value) || tags.rating;
+      if (key === 'LOVED' && /^(1|true|yes)$/i.test(value.trim())) tags.loved = true;
+      continue;
+    }
     for (const d of boxes(buf, item.start, item.end)) {
       if (d.type !== 'data' || d.end - d.start < 8) continue;
       const dataType = buf.readUInt32BE(d.start) & 0xFFFFFF;

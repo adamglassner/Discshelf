@@ -209,6 +209,18 @@ class Lastfm extends EventEmitter {
     }
   }
 
+  /** Loves or unloves a song on Last.fm. */
+  async love(track, loved) {
+    if (!this.getSession() || !track.artist || !track.title) return false;
+    try {
+      await this.call(loved ? 'track.love' : 'track.unlove', { artist: track.artist, track: track.title }, { post: true, session: true });
+      return true;
+    } catch (err) {
+      this._handleSessionError(err);
+      return false;
+    }
+  }
+
   /** Queues a scrobble (startedAt = ms timestamp when the song started) and tries to send the queue. */
   scrobble(track, startedAt) {
     if (!this.getSession() || !track.artist || !track.title) return false;

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- **Playlists.** Make playlists in the new Playlists section of the sidebar (the **+** button or Ctrl+N), then drag songs, albums or artists onto them, or right-click songs and choose **Add to Playlist**. Drag songs within a playlist to change the order; press Delete to take a song out of the playlist (it stays in your library). Right-click a playlist to play, shuffle, rename, duplicate, export it as an .m3u file, or delete it. **File → Import Playlist** reads .m3u and .m3u8 files.
+- **Up Next.** Right-click songs, albums or playlists and choose **Play Next** or **Add to Up Next**. They play before the rest of the list you started. The Up Next button in the player bar (Ctrl+U) shows what's coming; drag to reorder, double-click to play, or drop songs on it.
+- **Ratings and Loved.** Give songs one to five stars and a heart, in the song list, the player or the right-click menu. Both are saved into the music files (so other players see them), and loving a song also loves it on Last.fm when you're connected. Sort by Rating or Loved.
+- **Sleep timer** (Playback → Sleep Timer): stop after 15 minutes to 1½ hours, fading out over the last 30 seconds, or at the end of the song or album. The player shows how long is left; click it to turn the timer off.
+- **Statistics:** your library in numbers, most played songs, artists and albums, listening time by month, formats, genres and decades, and a **Year in review** for each year you listen.
+- **Duplicates:** finds songs that are in your library more than once, picks the best copy (lossless first, then the highest bitrate) and keeps it, moving plays, ratings and playlists over. The other files can go to the Recycle Bin.
+- **Missing info:** albums without artwork, genre, year or track numbers, songs without an album or artist, and titles that look like file names, each with a one-click fix (looked up online) and a Fix all.
+- **New look options:** an **iTunes** style (white, like iTunes 12) in light and dark, a choice of accent colors, and **Album colors**, which tints Discshelf with the colors of the album that's playing (Settings → Appearance).
+- **Version page:** Help → What's New (or Settings → About) shows the version you have, what's new in every release, and checks for updates. It opens by itself once after Discshelf updates.
+
 ## 0.4.0
 
 - **Changes are saved into the music files.** Details and artwork you change in Get Info (by hand, from an online lookup, or with Find Missing Album Artwork) are now written into the files themselves, so other players and Windows see them too. Works with MP3, FLAC, M4A (AAC and Apple Lossless), Ogg Vorbis, Opus and WAV. Each file is written to a copy first, read back and checked, and only then swapped in for the original; the audio itself isn't touched. You can turn this off in Settings, and Settings offers to save changes you made in 0.2 and 0.3 into the files.

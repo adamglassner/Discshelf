@@ -1,12 +1,16 @@
 # Discshelf
 
-A music player for the music on your computer, from Bytehawk Studio. It takes its layout from the classic Songbird media player: player controls and a "now playing" display across the top, your library on the left, Genre / Artist / Album filter panes above the song list, and album art on the right. Discshelf comes in **Light**, **Dark** and **Classic** (Songbird colors) themes.
+A music player for the music on your computer, from Bytehawk Studio. It takes its layout from the classic Songbird media player: player controls and a "now playing" display across the top, your library on the left, Genre / Artist / Album filter panes above the song list, and album art on the right. Discshelf comes in **Modern**, **Classic** (Songbird colors) and **iTunes** styles, each in light and dark.
 
 ![Discshelf's Albums view](docs/screenshots/albums.png)
 
 | Artists | Radio |
 |---|---|
 | ![Artists view](docs/screenshots/artists.png) | ![Radio](docs/screenshots/radio.png) |
+| **Up Next** | **Statistics** |
+| ![Up Next](docs/screenshots/up-next.png) | ![Statistics](docs/screenshots/statistics.png) |
+| **iTunes style** | **Album colors (dark)** |
+| ![iTunes style](docs/screenshots/itunes-light.png) | ![Album colors](docs/screenshots/album-colors.png) |
 
 | Classic light | Classic dark |
 |---|---|
@@ -33,11 +37,17 @@ The builds aren't code-signed yet, so Windows SmartScreen may say it "protected 
 - **Albums:** an iTunes-style grid with Recently Added along the top and all your albums below. Open an album for its artwork and song list, then Play or Shuffle it.
 - **Songs:** Genre → Artist → Album filter panes, a sortable song list (click a column header) and search (Ctrl+F).
 - **Play:** double-click a song or press Enter. Play/pause, next/previous, seek, volume, shuffle, and repeat (all or one song). Your keyboard's media keys work too.
+- **Playlists:** make them in the sidebar (Ctrl+N), drag songs, albums or artists onto them, drag to reorder, and import or export .m3u / .m3u8 files.
+- **Up Next:** right-click and choose **Play Next** or **Add to Up Next**; the Up Next panel (Ctrl+U) shows what's coming and lets you reorder it.
+- **Ratings and Loved:** stars and a heart for each song, saved into the files; loving a song loves it on Last.fm too.
+- **Sleep timer:** stop after 15 minutes to 1½ hours (with a fade), or at the end of the song or album (**Playback → Sleep Timer**).
+- **Tools:** **Statistics** (most played, listening time by month, year in review), **Duplicates** (keep the best copy) and **Missing info** (one-click fixes for missing artwork, genres, years and track numbers).
 - **Equalizer:** 10 bands, preamp and presets (button in the player bar, or **Playback → Equalizer**).
 - **Radio:** live stations from around the world (Radio Browser directory): top stations by country, genres, search, and favorites. Shows the song the station is playing.
 - **Get Info** (Ctrl+I, or right-click a song or album): edit song details and artwork yourself, or look them up on iTunes and Deezer. Using an album result also gives each song its title and track number from the album's track list. **File → Find Missing Album Artwork** fills in covers for your whole library. Changes are saved into the music files (MP3, FLAC, M4A, Ogg, Opus, WAV); each file is checked after writing before it replaces the original. You can turn this off in Settings.
 - **Last.fm:** connect your account in **Settings** to scrobble what you play, including songs on the radio when the station says what's playing.
-- **Themes:** **Modern** or **Classic** (Songbird's look), each in light or dark, or following Windows (**Settings → Appearance**).
+- **Themes:** **Modern**, **Classic** (Songbird's look) or **iTunes** (white, like iTunes 12), each in light or dark or following Windows, with a choice of accent colors, or **Album colors** to tint Discshelf with the album that's playing (**Settings → Appearance**).
+- **What's new:** **Help → What's New** shows your version, the changes in every release, and checks for updates.
 
 Apple Lossless (ALAC) files are added to the library, but they can't be played yet.
 
@@ -55,7 +65,9 @@ Your library and settings are kept in `%APPDATA%\Discshelf` (**Settings → Open
 | Go to the song that's playing | Ctrl+L |
 | Add a folder / add files | Ctrl+O / Ctrl+Shift+O |
 | Rescan library | F5 |
-| Remove from library | Delete |
+| Remove from library (or from the playlist you're in) | Delete |
+| New playlist | Ctrl+N |
+| Show / hide Up Next | Ctrl+U |
 | Get Info | Ctrl+I |
 | Settings | Ctrl+, |
 
@@ -102,7 +114,7 @@ The Bytehawk Studio Launcher picks up the new release automatically. Its catalog
 
 ## Coming later
 
-Playlists, a play queue, ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
+Gapless playback and crossfade, volume leveling, lyrics, a visualizer, ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
 
 ---
 

@@ -32,5 +32,14 @@
     starFill: f('<path d="m12 3.8 2.5 5.1 5.6.8-4.1 3.9 1 5.6-5-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z"/>'),
     stop: f('<rect x="6" y="6" width="12" height="12" rx="1.6"/>'),
     disc: s('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/>'),
+    playlist: s('<path d="M4 6.5h11M4 11h11M4 15.5h7"/><path d="M17.5 18.5V10l3-1"/><circle cx="15.8" cy="18.5" r="1.8"/>'),
+    queue: s('<path d="M4 6h16M4 11h16M4 16h9"/><path d="m16 14.5 4 2.5-4 2.5z" fill="currentColor"/>'),
+    heart: s('<path d="M12 20s-7.5-4.5-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.5 12 20 12 20z"/>'),
+    heartFill: f('<path d="M12 20s-7.5-4.5-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.5 12 20 12 20z"/>'),
+    moon: s('<path d="M19.5 14.5A7.8 7.8 0 0 1 9.5 4.5a7.8 7.8 0 1 0 10 10z"/>'),
+    stats: s('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+    dupes: s('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
+    missing: s('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.5" r=".6" fill="currentColor"/>'),
+    info: s('<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/>'),
   };
 })();

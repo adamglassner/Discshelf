@@ -100,7 +100,7 @@ window.DSModules.albums = (ctx) => {
   }
 
   function card(a, list, i) {
-    return `<div class="al-card" data-list="${list}" data-i="${i}">
+    return `<div class="al-card" data-list="${list}" data-i="${i}" draggable="true">
       <button type="button" class="al-open" title="${esc(`${a.title || 'Unknown Album'} — ${a.artist || 'Unknown Artist'}`)}">
         <span class="al-cover">${cover(a)}</span>
         <span class="al-title">${esc(a.title || 'Unknown Album')}</span>
@@ -145,7 +145,7 @@ window.DSModules.albums = (ctx) => {
       const d = t.discNo || 1;
       if (a.discs > 1 && d !== disc) { disc = d; html += `<div class="al-disc">Disc ${d}</div>`; }
       const playing = state.current && state.current.id === t.id;
-      html += `<div class="al-row${playing ? ' playing' : ''}${selectedTrack === t.id ? ' selected' : ''}" data-i="${i}">
+      html += `<div class="al-row${playing ? ' playing' : ''}${selectedTrack === t.id ? ' selected' : ''}" data-i="${i}" draggable="true">
         <span class="al-no">${playing ? (ctx.audio.paused ? I.pause : I.speaker) : (t.trackNo || '')}</span>
         <span class="al-name">${esc(t.title)}${a.various && t.artist ? `<span class="al-by"> — ${esc(t.artist)}</span>` : ''}</span>
         <span class="al-plays">${t.playCount ? plural(t.playCount, 'play', 'plays') : ''}</span>
@@ -264,6 +264,16 @@ window.DSModules.albums = (ctx) => {
         for (const r of view.querySelectorAll('.al-row')) r.classList.toggle('selected', r === row);
         if (state.artMode === 'selected') ctx.renderArtPane(selectedTrack);
       }
+    });
+    // Drag an album (or a song on an album page) onto a playlist or Up Next.
+    view.addEventListener('dragstart', (e) => {
+      const row = e.target.closest('.al-row');
+      let ids = null;
+      if (row && openKey) ids = [byKey.get(openKey).ids[parseInt(row.dataset.i, 10)]];
+      else { const al = albumFromCard(e.target); if (al) ids = al.ids; }
+      if (!ids) return;
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('application/x-discshelf-ids', JSON.stringify(ids));
     });
     view.addEventListener('dblclick', (e) => {
       const row = e.target.closest('.al-row');

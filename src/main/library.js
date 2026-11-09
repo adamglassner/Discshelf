@@ -69,6 +69,14 @@ class Library extends EventEmitter {
     // Saving changes into the music files themselves (set up by the main process).
     this.tagWriter = null; // async (path, fields, art) => …
     this.shouldWriteFiles = () => false;
+    this.playlists = []; // [{id, name, ids, created, updated}]
+    this.ignored = new Set(); // lower-case paths removed from the library: rescans don't bring them back
+    this.playsFile = path.join(dataDir, 'plays.json');
+    this.plays = []; // [[trackId, timestamp, seconds]] — listening history for Statistics
+    this._playsTimer = null;
+    this._bg = new Map(); // id -> {fields} waiting to be written into files (ratings, loved)
+    this._bgTimer = null;
+    this._bgRunning = false;
   }
 
   load() {
@@ -77,6 +85,8 @@ class Library extends EventEmitter {
       const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       this.folders = Array.isArray(data.folders) ? data.folders.filter((f) => typeof f === 'string') : [];
       if (data.artists && typeof data.artists === 'object') this.artists = data.artists;
+      if (Array.isArray(data.playlists)) this.playlists = data.playlists.filter((pl) => pl && pl.id && Array.isArray(pl.ids));
+      if (Array.isArray(data.ignored)) this.ignored = new Set(data.ignored);
       for (const t of Array.isArray(data.tracks) ? data.tracks : []) {
         if (t && t.id && t.path) this.tracks.set(t.id, t);
       }
@@ -87,10 +97,14 @@ class Library extends EventEmitter {
         console.error('library.json could not be read:', err.message);
       }
     }
+    try {
+      const plays = JSON.parse(fs.readFileSync(this.playsFile, 'utf8'));
+      if (Array.isArray(plays)) this.plays = plays;
+    } catch { /* no history yet */ }
   }
 
   snapshot() {
-    return { folders: [...this.folders], tracks: [...this.tracks.values()], artists: this.artists };
+    return { folders: [...this.folders], tracks: [...this.tracks.values()], artists: this.artists, playlists: this.playlists };
   }
 
   get(id) {
@@ -113,7 +127,10 @@ class Library extends EventEmitter {
   saveNow() {
     clearTimeout(this._saveTimer);
     this._saveTimer = null;
-    const data = JSON.stringify({ version: LIBRARY_VERSION, folders: this.folders, artists: this.artists, tracks: [...this.tracks.values()] });
+    const data = JSON.stringify({
+      version: LIBRARY_VERSION, folders: this.folders, artists: this.artists, playlists: this.playlists,
+      ignored: [...this.ignored], tracks: [...this.tracks.values()],
+    });
     const tmp = this.file + '.tmp';
     try {
       fs.writeFileSync(tmp, data);
@@ -125,11 +142,204 @@ class Library extends EventEmitter {
 
   // ------------------------------------------------------------------ edits
 
+  /** Removes songs from the library (not from disk). Rescans won't add them back unless you add them again. */
   removeTracks(ids) {
     let n = 0;
-    for (const id of ids) if (this.tracks.delete(id)) n++;
+    const gone = new Set();
+    for (const id of ids) {
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      this.ignored.add(t.path.toLowerCase());
+      this.tracks.delete(id);
+      gone.add(id);
+      n++;
+    }
+    for (const pl of this.playlists) pl.ids = pl.ids.filter((id) => !gone.has(id));
     if (n) { this.scheduleSave(); this.emit('changed', { removed: ids }); }
     return n;
+  }
+
+  // ------------------------------------------------------------------ playlists
+
+  _playlist(id) {
+    const pl = this.playlists.find((x) => x.id === id);
+    if (!pl) throw new Error('That playlist no longer exists');
+    return pl;
+  }
+
+  createPlaylist(name, ids = []) {
+    const pl = {
+      id: crypto.randomBytes(6).toString('hex'),
+      name: String(name || '').trim().slice(0, 200) || 'Untitled Playlist',
+      ids: [...new Set(ids.filter((id) => this.tracks.has(id)))],
+      created: Date.now(),
+      updated: Date.now(),
+    };
+    this.playlists.push(pl);
+    this.scheduleSave();
+    this.emit('changed', { playlists: true });
+    return pl;
+  }
+
+  renamePlaylist(id, name) {
+    const pl = this._playlist(id);
+    pl.name = String(name || '').trim().slice(0, 200) || pl.name;
+    pl.updated = Date.now();
+    this.scheduleSave();
+    this.emit('changed', { playlists: true });
+    return pl;
+  }
+
+  deletePlaylist(id) {
+    this.playlists = this.playlists.filter((x) => x.id !== id);
+    this.scheduleSave();
+    this.emit('changed', { playlists: true });
+  }
+
+  /** Adds songs (skipping ones already there). Returns {added, already}. */
+  addToPlaylist(id, ids, position = null) {
+    const pl = this._playlist(id);
+    const have = new Set(pl.ids);
+    const add = [...new Set(ids)].filter((x) => this.tracks.has(x) && !have.has(x));
+    const at = position === null || position < 0 || position > pl.ids.length ? pl.ids.length : position;
+    pl.ids.splice(at, 0, ...add);
+    pl.updated = Date.now();
+    this.scheduleSave();
+    this.emit('changed', { playlists: true });
+    return { added: add.length, already: ids.length - add.length };
+  }
+
+  /** Replaces a playlist's order (used for reordering and removing songs from it). */
+  setPlaylistIds(id, ids) {
+    const pl = this._playlist(id);
+    pl.ids = [...new Set(ids)].filter((x) => this.tracks.has(x));
+    pl.updated = Date.now();
+    this.scheduleSave();
+    this.emit('changed', { playlists: true });
+    return pl;
+  }
+
+  /**
+   * Reads an .m3u / .m3u8 playlist. Songs not in the library yet are added; missing files are counted.
+   * Returns {playlist, added, missing}.
+   */
+  async importM3u(file) {
+    const raw = await fs.promises.readFile(file);
+    const text = file.toLowerCase().endsWith('.m3u8') || raw.subarray(0, 3).equals(Buffer.from([0xEF, 0xBB, 0xBF]))
+      ? raw.toString('utf8').replace(/^\uFEFF/, '') : raw.toString('latin1');
+    const base = path.dirname(file);
+    const entries = [];
+    let missing = 0;
+    for (let line of text.split(/\r?\n/)) {
+      line = line.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (/^[a-z]+:\/\//i.test(line) && !/^file:\/\//i.test(line)) { missing++; continue; } // web addresses
+      let p = line;
+      if (/^file:\/\//i.test(p)) { try { p = require('url').fileURLToPath(p); } catch { missing++; continue; } }
+      p = path.resolve(base, p.replace(/[\\/]/g, path.sep));
+      try { await fs.promises.access(p); entries.push(p); } catch { missing++; }
+    }
+    const notInLibrary = entries.filter((p) => !this.tracks.has(trackId(p)) && isAudioFile(p));
+    if (notInLibrary.length) {
+      for (const p of notInLibrary) this.ignored.delete(p.toLowerCase());
+      await this.scan(notInLibrary);
+    }
+    const ids = entries.map((p) => trackId(p)).filter((id) => this.tracks.has(id));
+    const name = path.basename(file).replace(/\.m3u8?$/i, '');
+    const playlist = this.createPlaylist(name, ids);
+    return { playlist, added: notInLibrary.length, missing };
+  }
+
+  /** Writes a playlist as an extended .m3u / .m3u8 file. */
+  async exportM3u(id, file) {
+    const pl = this._playlist(id);
+    const lines = ['#EXTM3U', `#PLAYLIST:${pl.name}`];
+    for (const tid of pl.ids) {
+      const t = this.tracks.get(tid);
+      if (!t) continue;
+      lines.push(`#EXTINF:${Math.round(t.duration || -1)},${t.artist ? `${t.artist} - ` : ''}${t.title}`);
+      lines.push(t.path);
+    }
+    const utf8 = file.toLowerCase().endsWith('.m3u8');
+    const body = lines.join('\r\n') + '\r\n';
+    await fs.promises.writeFile(file, utf8 ? Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from(body, 'utf8')]) : Buffer.from(body, 'latin1'));
+    return { count: pl.ids.length };
+  }
+
+  // ------------------------------------------------------------------ ratings, loved
+
+  /** Sets star ratings (0–5) and/or loved; saved into the files in the background when that's on. */
+  setRatingLoved(ids, { rating, loved }) {
+    const changed = [];
+    for (const id of ids) {
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      const fields = {};
+      if (rating !== undefined) { t.rating = Math.max(0, Math.min(5, Math.round(rating))); fields.rating = t.rating; }
+      if (loved !== undefined) { t.loved = !!loved; fields.loved = t.loved; }
+      changed.push(id);
+      const job = this._bg.get(id) || {};
+      this._bg.set(id, { ...job, ...fields });
+    }
+    if (changed.length) {
+      this.scheduleSave();
+      this.emit('changed', { updated: changed, quiet: true });
+      clearTimeout(this._bgTimer);
+      this._bgTimer = setTimeout(() => this._runBackgroundWrites(), 2000);
+    }
+    return changed.length;
+  }
+
+  async _runBackgroundWrites() {
+    if (this._bgRunning) return;
+    this._bgRunning = true;
+    try {
+      while (this._bg.size) {
+        const [id, fields] = this._bg.entries().next().value;
+        this._bg.delete(id);
+        const r = await this._writeFiles([{ id, fields }]);
+        if (r.failed.length) this.emit('writeFailed', r.failed[0]);
+      }
+    } finally {
+      this._bgRunning = false;
+    }
+  }
+
+  // ------------------------------------------------------------------ duplicates
+
+  /**
+   * Keeps one copy of a song and removes the others from the library, adding their plays, best rating
+   * and loved to the copy that's kept, and pointing playlists at it. `trash(path)` moves a file to the
+   * Recycle Bin when given.
+   */
+  async mergeDuplicates(keepId, removeIds, trash = null) {
+    const keep = this.tracks.get(keepId);
+    if (!keep) throw new Error('The song to keep is no longer in the library');
+    const removed = [];
+    const trashFailed = [];
+    for (const id of removeIds) {
+      const t = this.tracks.get(id);
+      if (!t || id === keepId) continue;
+      keep.playCount = (keep.playCount || 0) + (t.playCount || 0);
+      keep.lastPlayed = Math.max(keep.lastPlayed || 0, t.lastPlayed || 0);
+      keep.rating = Math.max(keep.rating || 0, t.rating || 0);
+      keep.loved = !!(keep.loved || t.loved);
+      for (const pl of this.playlists) {
+        const i = pl.ids.indexOf(id);
+        if (i >= 0) { if (pl.ids.includes(keepId)) pl.ids.splice(i, 1); else pl.ids[i] = keepId; }
+      }
+      for (const play of this.plays) if (play[0] === id) play[0] = keepId;
+      if (trash) {
+        try { await trash(t.path); } catch (err) { trashFailed.push(t.title); }
+      }
+      this.ignored.add(t.path.toLowerCase());
+      this.tracks.delete(id);
+      removed.push(id);
+    }
+    this.scheduleSave();
+    this._savePlays();
+    this.emit('changed', { removed });
+    return { removed: removed.length, trashFailed };
   }
 
   removeFolder(folder) {
@@ -285,13 +495,25 @@ class Library extends EventEmitter {
     return [...groups.values()];
   }
 
-  markPlayed(id) {
+  markPlayed(id, seconds) {
     const t = this.tracks.get(id);
     if (!t) return null;
     t.playCount = (t.playCount || 0) + 1;
     t.lastPlayed = Date.now();
+    this.plays.push([id, t.lastPlayed, Math.round(Number.isFinite(seconds) && seconds > 0 ? seconds : t.duration || 0)]);
     this.scheduleSave();
+    this._savePlays();
     return { id, playCount: t.playCount, lastPlayed: t.lastPlayed };
+  }
+
+  _savePlays() {
+    clearTimeout(this._playsTimer);
+    this._playsTimer = setTimeout(() => {
+      try {
+        fs.writeFileSync(this.playsFile + '.tmp', JSON.stringify(this.plays));
+        fs.renameSync(this.playsFile + '.tmp', this.playsFile);
+      } catch (err) { console.error('Could not save play history:', err.message); }
+    }, 1000);
   }
 
   // ------------------------------------------------------------------ scanning
@@ -325,6 +547,7 @@ class Library extends EventEmitter {
             roots.push(abs);
           } else if (st.isFile() && isAudioFile(p)) {
             files.push(path.resolve(p));
+            this.ignored.delete(path.resolve(p).toLowerCase()); // added on purpose: no longer ignored
           }
         }
       } else {
@@ -335,6 +558,8 @@ class Library extends EventEmitter {
         if (state.cancelled) break;
         await this._walk(root, files, state);
       }
+      // Songs removed from the library stay out, unless they were added again on purpose (above).
+      for (let i = files.length - 1; i >= 0; i--) if (this.ignored.has(files[i].toLowerCase())) files.splice(i, 1);
       state.found = files.length;
       state.phase = 'reading';
 
@@ -442,6 +667,8 @@ class Library extends EventEmitter {
       added: existing ? existing.added : Date.now(),
       playCount: existing ? existing.playCount || 0 : 0,
       lastPlayed: existing ? existing.lastPlayed || 0 : 0,
+      rating: tags.rating || (existing ? existing.rating || 0 : 0),
+      loved: !!(tags.loved || (existing && existing.loved)),
     };
     if (existing && existing.edits) { t.edits = existing.edits; applyEdits(t); }
     this.tracks.set(id, t);

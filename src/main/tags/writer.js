@@ -12,7 +12,9 @@ const { FileSource } = require('./reader');
 const { readTags } = require('./index');
 const { ID3V1_GENRES } = require('./common');
 
-const FIELD_KEYS = ['title', 'artist', 'albumArtist', 'album', 'genre', 'year', 'trackNo', 'trackOf', 'discNo', 'discOf'];
+const FIELD_KEYS = ['title', 'artist', 'albumArtist', 'album', 'genre', 'year', 'trackNo', 'trackOf', 'discNo', 'discOf', 'rating', 'loved'];
+const POPM_EMAIL = 'Windows Media Player 9 Series'; // what Windows Explorer reads
+const POPM_VALUES = [0, 1, 64, 128, 196, 255];
 const MAX_PICTURE = 16 * 1024 * 1024 - 1024;
 
 class TagWriteError extends Error {}
@@ -139,7 +141,17 @@ function buildId3(existing, v, changed, art, padding) {
   const drop = new Set();
   for (const k of changed) for (const id of ID3_FRAMES[k] || []) drop.add(id);
   if (art !== undefined) drop.add('APIC');
-  const frames = keep.filter((f) => !drop.has(f.id)).map((f) => id3Frame(f.id, f.data, major, f.flags));
+  if (changed.has('rating')) drop.add('POPM');
+  const txxxName = (f) => {
+    if (f.id !== 'TXXX') return '';
+    const enc = f.data[0];
+    const wide = enc === 1 || enc === 2;
+    let end = 1;
+    if (wide) { while (end + 1 < f.data.length && !(f.data[end] === 0 && f.data[end + 1] === 0)) end += 2; } else end = f.data.indexOf(0, 1);
+    const raw = f.data.subarray(1, end < 0 ? f.data.length : end);
+    return (enc === 1 ? raw.toString('utf16le').replace(/^\uFEFF/, '') : enc === 2 ? Buffer.from(raw).swap16().toString('utf16le') : raw.toString(enc === 3 ? 'utf8' : 'latin1')).toUpperCase();
+  };
+  const frames = keep.filter((f) => !drop.has(f.id) && !(changed.has('loved') && txxxName(f) === 'LOVED')).map((f) => id3Frame(f.id, f.data, major, f.flags));
 
   const text = (id, value) => { if (!isEmpty(value)) frames.push(id3Frame(id, id3Text(String(value), major), major)); };
   if (changed.has('title')) text('TIT2', v.title);
@@ -150,6 +162,13 @@ function buildId3(existing, v, changed, art, padding) {
   if (changed.has('year')) text(major === 4 ? 'TDRC' : 'TYER', v.year ? String(v.year) : '');
   if (changed.has('track')) text('TRCK', pair(v.trackNo, v.trackOf));
   if (changed.has('disc')) text('TPOS', pair(v.discNo, v.discOf));
+  if (changed.has('rating') && v.rating) {
+    frames.push(id3Frame('POPM', Buffer.concat([Buffer.from(`${POPM_EMAIL}\0`, 'latin1'), Buffer.from([POPM_VALUES[v.rating]])]), major));
+  }
+  if (changed.has('loved') && v.loved) {
+    // TXXX: encoding, description "LOVED", terminator, value "1" (plain ASCII in both versions).
+    frames.push(id3Frame('TXXX', Buffer.concat([Buffer.from([major === 4 ? 3 : 0]), Buffer.from('LOVED\x001', 'latin1')]), major));
+  }
   if (art) {
     const head = Buffer.concat([Buffer.from([0]), Buffer.from(`${art.mime}\0`, 'latin1'), Buffer.from([3, 0])]);
     frames.push(id3Frame('APIC', Buffer.concat([head, art.data]), major));
@@ -219,6 +238,7 @@ async function writeMp3(src, dest, v, fields, art) {
 const VORBIS_KEYS = {
   title: ['TITLE'], artist: ['ARTIST'], albumArtist: ['ALBUMARTIST', 'ALBUM ARTIST', 'ALBUM_ARTIST'], album: ['ALBUM'],
   genre: ['GENRE'], year: ['DATE', 'YEAR'], track: ['TRACKNUMBER', 'TRACKTOTAL', 'TOTALTRACKS'], disc: ['DISCNUMBER', 'DISCTOTAL', 'TOTALDISCS'],
+  rating: ['RATING', 'FMPS_RATING'], loved: ['LOVED'],
 };
 
 function parseVorbisComment(buf) {
@@ -253,6 +273,8 @@ function buildVorbisComment(existing, v, fields, art, keepPictures) {
   if (groups.has('year')) add('DATE', v.year || '');
   if (groups.has('track')) { add('TRACKNUMBER', v.trackNo || ''); add('TRACKTOTAL', v.trackOf || ''); }
   if (groups.has('disc')) { add('DISCNUMBER', v.discNo || ''); add('DISCTOTAL', v.discOf || ''); }
+  if (groups.has('rating')) add('RATING', v.rating ? v.rating * 20 : '');
+  if (groups.has('loved')) add('LOVED', v.loved ? '1' : '');
   if (art && !keepPictures) add('METADATA_BLOCK_PICTURE', flacPicture(art).toString('base64'));
   return Buffer.concat([u32le(vendor.length), vendor, u32le(entries.length), ...entries.flatMap((e) => [u32le(e.length), e])]);
 }
@@ -364,6 +386,20 @@ function buildIlst(ilst, v, fields, art) {
   if (groups.has('track') && (v.trackNo || v.trackOf)) items.push(ilstItem('trkn', 0, Buffer.concat([Buffer.alloc(2), num(v.trackNo || 0), num(v.trackOf || 0), Buffer.alloc(2)])));
   if (groups.has('disc') && (v.discNo || v.discOf)) items.push(ilstItem('disk', 0, Buffer.concat([Buffer.alloc(2), num(v.discNo || 0), num(v.discOf || 0)])));
   if (art) items.push(ilstItem('covr', art.mime === 'image/png' ? 14 : 13, art.data));
+  const freeform = (name, value) => {
+    // Remove an existing "----" item with this name, then add the new value (if any).
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === '----' && items[i].raw.includes(Buffer.from(`name\0\0\0\0${name}`, 'latin1'))) items.splice(i, 1);
+    }
+    if (isEmpty(value)) return;
+    const raw = mp4Box('----',
+      mp4Box('mean', u32be(0), Buffer.from('com.apple.iTunes', 'latin1')),
+      mp4Box('name', u32be(0), Buffer.from(name, 'latin1')),
+      mp4Box('data', u32be(1), u32be(0), Buffer.from(String(value), 'utf8')));
+    items.push({ type: '----', raw });
+  };
+  if (groups.has('rating')) freeform('RATING', v.rating ? v.rating * 20 : '');
+  if (groups.has('loved')) freeform('LOVED', v.loved ? '1' : '');
   ilst.children = items;
 }
 
@@ -680,7 +716,9 @@ async function writeTags(filePath, fields = {}, art) {
   if (!before) throw new TagWriteError('Discshelf couldn’t read this file');
   const v = {};
   for (const k of FIELD_KEYS) v[k] = k in fields ? fields[k] : before[k];
-  for (const k of ['year', 'trackNo', 'trackOf', 'discNo', 'discOf']) v[k] = parseInt(v[k], 10) || 0;
+  for (const k of ['year', 'trackNo', 'trackOf', 'discNo', 'discOf', 'rating']) v[k] = parseInt(v[k], 10) || 0;
+  v.rating = Math.max(0, Math.min(5, v.rating));
+  v.loved = v.loved === true || v.loved === 'true' || v.loved === 1;
   for (const k of ['title', 'artist', 'albumArtist', 'album', 'genre']) v[k] = String(v[k] ?? '').trim();
 
   let st;

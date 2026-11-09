@@ -31,7 +31,7 @@
     <div class="faceplate" id="faceplate">
       <div class="fp-art" id="fp-art"></div>
       <div class="fp-main">
-        <div class="fp-title" id="fp-title">Discshelf</div>
+        <div class="fp-titleline"><button type="button" class="fp-love" id="btn-love" aria-label="Love" aria-pressed="false" hidden></button><div class="fp-title" id="fp-title">Discshelf</div><button type="button" class="fp-sleep" id="fp-sleep" hidden></button></div>
         <div class="fp-sub" id="fp-sub">Double-click a song to play it</div>
         <div class="fp-seek">
           <span class="fp-time" id="fp-elapsed">0:00</span>
@@ -45,6 +45,7 @@
       <button type="button" class="ibtn toggle" id="btn-shuffle" aria-label="Shuffle" aria-pressed="false" title="Shuffle"></button>
       <button type="button" class="ibtn toggle" id="btn-repeat" aria-label="Repeat: off" aria-pressed="false" title="Repeat: off"></button>
       <button type="button" class="ibtn toggle" id="btn-eq" aria-label="Equalizer" aria-pressed="false" title="Equalizer"></button>
+      <button type="button" class="ibtn toggle" id="btn-queue" aria-label="Up Next" aria-pressed="false" title="Up Next"></button>
       <div class="volume">
         <button type="button" class="ibtn" id="btn-mute" aria-label="Mute" title="Mute"></button>
         <input type="range" id="volume" min="0" max="100" value="80" aria-label="Volume">
@@ -59,16 +60,29 @@
 
   <main id="main">
     <aside id="sidebar" aria-label="Library">
-      <div class="side-section">
-        <div class="side-heading">Library</div>
-        <div id="views" role="list"></div>
-      </div>
-      <div class="side-section">
-        <div class="side-heading">
-          <span>Music folders</span>
-          <button type="button" class="ibtn small" id="btn-manage-folders" aria-label="Manage music folders" title="Manage music folders"></button>
+      <div class="side-scroll">
+        <div class="side-section">
+          <div class="side-heading">Library</div>
+          <div id="views" role="list"></div>
         </div>
-        <div id="folder-list" role="list"></div>
+        <div class="side-section">
+          <div class="side-heading">
+            <span>Playlists</span>
+            <button type="button" class="ibtn small" id="btn-new-playlist" aria-label="New playlist" title="New playlist (Ctrl+N). Drag songs here to make one."></button>
+          </div>
+          <div id="playlist-list" role="list"></div>
+        </div>
+        <div class="side-section">
+          <div class="side-heading">Tools</div>
+          <div id="tool-list" role="list"></div>
+        </div>
+        <div class="side-section">
+          <div class="side-heading">
+            <span>Music folders</span>
+            <button type="button" class="ibtn small" id="btn-manage-folders" aria-label="Manage music folders" title="Manage music folders"></button>
+          </div>
+          <div id="folder-list" role="list"></div>
+        </div>
       </div>
       <div class="side-actions">
         <button type="button" class="side-item" id="btn-settings"></button>
@@ -120,6 +134,10 @@
 
       <div id="settings-view" hidden tabindex="-1"></div>
 
+      <div id="tools-view" hidden tabindex="-1"></div>
+
+      <div id="version-view" hidden tabindex="-1"></div>
+
       <div id="empty" hidden>
         <div class="empty-card">
           <svg class="empty-art" viewBox="0 0 160 120" aria-hidden="true">
@@ -151,6 +169,7 @@
       <div class="art-frame" id="art-frame"></div>
       <div class="art-info" id="art-info"></div>
     </aside>
+    <aside id="queue-panel" aria-label="Up Next" hidden></aside>
   </main>
 
   <footer id="statusbar">
@@ -173,6 +192,12 @@
 <script src="eq.js"></script>
 <script src="info.js"></script>
 <script src="settings.js"></script>
+<script src="queue.js"></script>
+<script src="playlists.js"></script>
+<script src="tools.js"></script>
+<script src="sleep.js"></script>
+<script src="colors.js"></script>
+<script src="version.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

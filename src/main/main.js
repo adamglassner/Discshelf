@@ -144,6 +144,13 @@ const DEFAULT_SETTINGS = {
   lastPosition: 0,
   bounds: null,
   maximized: false,
+  upNext: [], // song ids lined up with Play Next / Add to Up Next
+  queueSource: '',
+  dupesIgnored: [], // duplicate groups marked "Not duplicates"
+  albumColors: false, // tint the player with the colors of the album that's playing
+  accent: '', // '' = the theme's own accent color
+  lastSeenVersion: '', // shows What's New once after an update
+  checkUpdates: true,
 };
 
 function loadSettings() {
@@ -155,7 +162,7 @@ function loadSettings() {
   }
   // 0.1.0 had a single "classic" theme (dark): it's now the Classic style in dark mode.
   if (settings.theme === 'classic') { settings.style = 'classic'; settings.theme = 'dark'; }
-  if (!['modern', 'classic'].includes(settings.style)) settings.style = 'modern';
+  if (!['modern', 'classic', 'itunes'].includes(settings.style)) settings.style = 'modern';
   if (!['system', 'light', 'dark'].includes(settings.theme)) settings.theme = 'system';
   const eq = settings.eq || {};
   settings.eq = {
@@ -340,7 +347,7 @@ function buildMenu(name) {
     label, type: 'radio', checked: settings[key] === id,
     click: () => { settings[key] = id; saveSettings(); command('appearance', { style: settings.style, theme: settings.theme }); },
   });
-  const styles = [radio('style', 'modern', 'Modern'), radio('style', 'classic', 'Classic (Songbird)')];
+  const styles = [radio('style', 'modern', 'Modern'), radio('style', 'classic', 'Classic (Songbird)'), radio('style', 'itunes', 'iTunes')];
   const modes = [radio('theme', 'system', 'Follow Windows'), radio('theme', 'light', 'Light'), radio('theme', 'dark', 'Dark')];
   const menus = {
     appearance: [...styles, { type: 'separator' }, ...modes],
@@ -350,6 +357,9 @@ function buildMenu(name) {
       { label: 'Rescan Library', accelerator: 'F5', click: () => library.scan() },
       { label: 'Find Missing Album Artwork…', click: () => command('findMissingArt') },
       { type: 'separator' },
+      { label: 'New Playlist…', accelerator: 'CmdOrCtrl+N', click: () => command('newPlaylist', []) },
+      { label: 'Import Playlist (.m3u)…', click: () => importPlaylist() },
+      { type: 'separator' },
       { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => command('settings') },
       { type: 'separator' },
       { label: 'Exit', click: () => app.quit() },
@@ -358,6 +368,9 @@ function buildMenu(name) {
       { label: 'Songs', click: () => command('view', 'music') },
       { label: 'Artists', click: () => command('view', 'artists') },
       { label: 'Albums', click: () => command('view', 'albums') },
+      { label: 'Statistics', click: () => command('view', 'stats') },
+      { label: 'Duplicates', click: () => command('view', 'dupes') },
+      { label: 'Missing Info', click: () => command('view', 'missing') },
       { label: 'Radio', click: () => command('view', 'radio') },
       { type: 'separator' },
       { label: 'Style', submenu: styles },
@@ -384,9 +397,20 @@ function buildMenu(name) {
         ],
       },
       { type: 'separator' },
+      { label: 'Up Next', accelerator: 'CmdOrCtrl+U', click: () => command('toggleQueue') },
+      {
+        label: 'Sleep Timer',
+        submenu: [
+          ['off', 'Off'], ['15', '15 minutes'], ['30', '30 minutes'], ['45', '45 minutes'], ['60', '1 hour'], ['90', '1½ hours'],
+          ['song', 'End of this song'], ['album', 'End of this album'],
+        ].map(([v, label]) => ({ label, type: 'radio', checked: (sleepMode || 'off') === v, click: () => command('sleep', v) })),
+      },
       { label: 'Equalizer…', click: () => command('equalizer') },
     ],
     help: [
+      { label: 'What’s New in Discshelf', click: () => command('whatsNew') },
+      { label: 'Check for Updates…', click: () => command('checkUpdates') },
+      { type: 'separator' },
       { label: 'Keyboard Shortcuts', click: () => command('shortcuts') },
       { label: 'Open Data Folder', click: () => shell.openPath(app.getPath('userData')) },
       { type: 'separator' },
@@ -447,7 +471,20 @@ function registerIpc() {
   ipcMain.handle('library:cancelScan', () => library.cancelScan());
   ipcMain.handle('library:removeFolder', (_e, folder) => library.removeFolder(String(folder)));
   ipcMain.handle('library:removeTracks', (_e, ids) => library.removeTracks(Array.isArray(ids) ? ids : []));
-  ipcMain.handle('track:played', (_e, id) => library.markPlayed(id));
+  ipcMain.handle('track:played', (_e, { id, seconds }) => library.markPlayed(id, Number(seconds) || 0));
+  ipcMain.handle('app:changelog', async () => {
+    try { return await fs.promises.readFile(path.join(app.getAppPath(), 'CHANGELOG.md'), 'utf8'); } catch { return ''; }
+  });
+  ipcMain.handle('app:checkUpdate', async () => {
+    const res = await net.fetch('https://api.github.com/repos/adamglassner/discshelf/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': userAgent() },
+    });
+    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+    const r = await res.json();
+    const asset = (r.assets || []).find((a) => /Setup\.exe$/i.test(a.name));
+    return { version: String(r.tag_name || '').replace(/^v/, ''), url: r.html_url, download: asset ? asset.browser_download_url : null, notes: r.body || '' };
+  });
+  ipcMain.handle('app:openUrl', (_e, url) => { if (/^https:\/\//.test(String(url))) shell.openExternal(String(url)); });
   ipcMain.handle('track:showInFolder', (_e, id) => {
     const t = library.get(id);
     if (t) shell.showItemInFolder(t.path);
@@ -457,17 +494,43 @@ function registerIpc() {
     if (!win) return;
     buildMenu(name).popup({ window: win, x: Math.round(x), y: Math.round(y) });
   });
-  ipcMain.handle('menu:trackContext', (_e, { ids, x, y }) => {
+  /** "Add to Playlist" submenu: every playlist, plus a new one made from these songs. */
+  const playlistSubmenu = (ids, exceptId) => [
+    { label: 'New Playlist…', click: () => command('newPlaylist', ids) },
+    ...(library.playlists.length ? [{ type: 'separator' }] : []),
+    ...library.playlists.filter((pl) => pl.id !== exceptId).map((pl) => ({ label: pl.name.slice(0, 60), click: () => command('addToPlaylist', { id: pl.id, ids }) })),
+  ];
+  const ratingSubmenu = (ids) => {
+    const tracks = ids.map((id) => library.get(id)).filter(Boolean);
+    const cur = tracks.length && tracks.every((t) => (t.rating || 0) === (tracks[0].rating || 0)) ? tracks[0].rating || 0 : -1;
+    return [0, 1, 2, 3, 4, 5].map((r) => ({
+      label: r ? '★'.repeat(r) + '☆'.repeat(5 - r) : 'None', type: 'radio', checked: cur === r,
+      click: () => command('rate', { ids, rating: r }),
+    }));
+  };
+  const loveItem = (ids) => {
+    const allLoved = ids.every((id) => library.get(id)?.loved);
+    return { label: allLoved ? 'Unlove' : 'Love', click: () => command('love', { ids, loved: !allLoved }) };
+  };
+
+  ipcMain.handle('menu:trackContext', (_e, { ids, x, y, playlistId }) => {
     if (!win || !Array.isArray(ids) || !ids.length) return;
     const one = ids.length === 1;
     const m = Menu.buildFromTemplate([
       { label: one ? 'Play' : `Play ${ids.length} Songs`, click: () => command('playIds', ids) },
+      { label: 'Play Next', click: () => command('playNext', ids) },
+      { label: 'Add to Up Next', click: () => command('addUpNext', ids) },
+      { label: 'Add to Playlist', submenu: playlistSubmenu(ids, playlistId) },
+      { type: 'separator' },
+      loveItem(ids),
+      { label: 'Rating', submenu: ratingSubmenu(ids) },
       { type: 'separator' },
       { label: one ? 'Get Info' : `Get Info (${ids.length} Songs)`, accelerator: 'CmdOrCtrl+I', click: () => command('getInfo', ids) },
       { label: 'Go to Album', enabled: one, click: () => command('goToAlbum', ids[0]) },
       { label: 'Go to Artist', enabled: one, click: () => command('goToArtist', ids[0]) },
       { label: 'Show in Explorer', enabled: one, click: () => { const t = library.get(ids[0]); if (t) shell.showItemInFolder(t.path); } },
       { type: 'separator' },
+      ...(playlistId ? [{ label: one ? 'Remove from Playlist' : `Remove ${ids.length} Songs from Playlist`, click: () => command('removeFromPlaylist', { id: playlistId, ids }) }] : []),
       { label: one ? 'Remove from Library' : `Remove ${ids.length} Songs from Library`, click: () => command('confirmRemove', ids) },
     ]);
     m.popup({ window: win, x: Math.round(x), y: Math.round(y) });
@@ -475,13 +538,35 @@ function registerIpc() {
   ipcMain.handle('menu:albumContext', (_e, { ids, title, x, y }) => {
     if (!win || !Array.isArray(ids) || !ids.length) return;
     const m = Menu.buildFromTemplate([
-      { label: 'Play Album', click: () => command('playIds', ids) },
-      { label: 'Shuffle Album', click: () => command('shuffleIds', ids) },
+      { label: 'Play', click: () => command('playIds', ids) },
+      { label: 'Shuffle', click: () => command('shuffleIds', ids) },
+      { label: 'Play Next', click: () => command('playNext', ids) },
+      { label: 'Add to Up Next', click: () => command('addUpNext', ids) },
+      { label: 'Add to Playlist', submenu: playlistSubmenu(ids) },
+      { type: 'separator' },
+      loveItem(ids),
+      { label: 'Rating', submenu: ratingSubmenu(ids) },
       { type: 'separator' },
       { label: 'Get Info', click: () => command('getInfo', ids) },
       { label: 'Show in Explorer', click: () => { const t = library.get(ids[0]); if (t) shell.showItemInFolder(t.path); } },
       { type: 'separator' },
       { label: `Remove “${String(title || 'Album').slice(0, 40)}” from Library`, click: () => command('confirmRemove', ids) },
+    ]);
+    m.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+  });
+  ipcMain.handle('menu:playlistContext', (_e, { id, x, y }) => {
+    const pl = library.playlists.find((p) => p.id === id);
+    if (!win || !pl) return;
+    const m = Menu.buildFromTemplate([
+      { label: 'Play', enabled: pl.ids.length > 0, click: () => command('playIds', pl.ids) },
+      { label: 'Shuffle', enabled: pl.ids.length > 0, click: () => command('shuffleIds', pl.ids) },
+      { label: 'Add to Up Next', enabled: pl.ids.length > 0, click: () => command('addUpNext', pl.ids) },
+      { type: 'separator' },
+      { label: 'Rename…', click: () => command('renamePlaylist', id) },
+      { label: 'Duplicate', click: () => { library.createPlaylist(`${pl.name} copy`, pl.ids); } },
+      { label: 'Export as .m3u…', click: () => exportPlaylist(id) },
+      { type: 'separator' },
+      { label: 'Delete Playlist…', click: () => command('deletePlaylist', id) },
     ]);
     m.popup({ window: win, x: Math.round(x), y: Math.round(y) });
   });
@@ -526,6 +611,43 @@ function registerIpc() {
     return toWire(await online.downloadImage(url));
   });
   ipcMain.handle('art:findMissing', () => findMissingArt());
+
+  // ---- playlists
+  ipcMain.handle('playlist:create', (_e, { name, ids }) => library.createPlaylist(name, Array.isArray(ids) ? ids : []));
+  ipcMain.handle('playlist:rename', (_e, { id, name }) => library.renamePlaylist(id, name));
+  ipcMain.handle('playlist:delete', (_e, id) => library.deletePlaylist(id));
+  ipcMain.handle('playlist:add', (_e, { id, ids, position }) => library.addToPlaylist(id, Array.isArray(ids) ? ids : [], position ?? null));
+  ipcMain.handle('playlist:set', (_e, { id, ids }) => library.setPlaylistIds(id, Array.isArray(ids) ? ids : []));
+  ipcMain.handle('playlist:import', () => importPlaylist());
+  ipcMain.handle('playlist:export', (_e, id) => exportPlaylist(id));
+  ipcMain.handle('menu:sleepState', (_e, mode) => { sleepMode = mode; });
+
+  // ---- ratings, loved, play history
+  ipcMain.handle('track:rate', (_e, { ids, rating }) => library.setRatingLoved(ids || [], { rating }));
+  ipcMain.handle('track:love', async (_e, { ids, loved }) => {
+    const n = library.setRatingLoved(ids || [], { loved: !!loved });
+    // Love on Last.fm too (a handful at a time is plenty).
+    if (lastfm.getSession && lastfm.status().connected) {
+      for (const id of (ids || []).slice(0, 25)) { const t = library.get(id); if (t) lastfm.love(t, !!loved); }
+    }
+    return n;
+  });
+  ipcMain.handle('library:plays', () => library.plays);
+
+  // ---- library tools
+  ipcMain.handle('library:mergeDuplicates', (_e, { keep, remove, trash }) =>
+    library.mergeDuplicates(keep, Array.isArray(remove) ? remove : [], trash ? (p) => shell.trashItem(p) : null));
+  ipcMain.handle('fix:albumInfo', (_e, ids) => fixAlbumInfo(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('art:findForAlbum', async (_e, ids) => {
+    if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
+    const tracks = (ids || []).map((id) => library.get(id)).filter(Boolean);
+    if (!tracks.length || !tracks[0].album) return { found: false };
+    const artist = tracks.find((t) => t.albumArtist)?.albumArtist || tracks[0].artist || '';
+    const match = await online.findAlbumCover(artist, tracks[0].album);
+    if (!match) return { found: false };
+    const r = await library.setArtwork(tracks.map((t) => t.id), await online.downloadImage(match.artwork));
+    return { found: true, ...r };
+  });
   ipcMain.handle('track:saveEach', async (_e, { entries, art, artIds }) => {
     const r = await library.updateEach(Array.isArray(entries) ? entries : []);
     const a = fromWire(art);
@@ -623,6 +745,81 @@ function registerIpc() {
   ipcMain.handle('art:cancelFind', () => { if (artJob) artJob.cancelled = true; });
 }
 
+// ------------------------------------------------------------------ playlists (files)
+
+let sleepMode = 'off';
+
+async function importPlaylist() {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Import a playlist', properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Playlists', extensions: ['m3u', 'm3u8'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  const results = [];
+  for (const f of r.filePaths) {
+    try { results.push(await library.importM3u(f)); } catch (err) { results.push({ error: `${path.basename(f)}: ${err.message}` }); }
+  }
+  send('playlist:imported', results.map((x) => (x.error ? x : { id: x.playlist.id, name: x.playlist.name, count: x.playlist.ids.length, added: x.added, missing: x.missing })));
+  return results.length;
+}
+
+async function exportPlaylist(id) {
+  const pl = library.playlists.find((p) => p.id === id);
+  if (!pl) return null;
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Export playlist',
+    defaultPath: path.join(app.getPath('music'), `${pl.name.replace(/[<>:"/\\|?*]+/g, '_')}.m3u8`),
+    filters: [{ name: 'Playlist (UTF-8)', extensions: ['m3u8'] }, { name: 'Playlist (older players)', extensions: ['m3u'] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+  const res = await library.exportM3u(id, r.filePath);
+  send('toast', `Exported “${pl.name}” (${res.count} songs).`);
+  return res;
+}
+
+// ------------------------------------------------------------------ fixing missing album info
+
+/**
+ * Looks an album up online and fills in only what's missing (genre, year, track and disc numbers).
+ * Returns {ok, changed, album} or {ok: false, reason}.
+ */
+async function fixAlbumInfo(ids) {
+  if (!settings.onlineLookup) return { ok: false, reason: 'Online lookups are turned off in Settings' };
+  const tracks = ids.map((id) => library.get(id)).filter(Boolean);
+  if (!tracks.length || !tracks[0].album) return { ok: false, reason: 'These songs have no album name to look up' };
+  const artist = tracks.find((t) => t.albumArtist)?.albumArtist || tracks[0].artist || '';
+  const { norm } = require('./online');
+  const { results } = await online.search(`${artist} ${tracks[0].album}`.trim(), 'album');
+  const a = norm(tracks[0].album);
+  const ar = norm(artist);
+  const pick = results.find((r) => {
+    const ra = norm(r.album);
+    const rr = norm(r.albumArtist || r.artist);
+    return r.albumRef && (ra === a || (a.length > 3 && (ra.startsWith(a) || a.startsWith(ra)))) && (!ar || rr === ar || rr.includes(ar) || ar.includes(rr));
+  });
+  if (!pick) return { ok: false, reason: 'No matching album found online' };
+  const al = await online.albumTracks(pick.albumRef);
+  const local = tracks.map((t) => ({ id: t.id, title: t.title, trackNo: t.trackNo, discNo: t.discNo, duration: t.duration, path: t.path }));
+  const matches = matchTracks(local, al.tracks);
+  const entries = [];
+  for (const t of tracks) {
+    const fields = {};
+    if (!t.genre && al.genre) fields.genre = al.genre;
+    if (!t.year && al.year) fields.year = al.year;
+    const m = matches.find((x) => x.id === t.id);
+    const at = m && m.index >= 0 ? al.tracks[m.index] : null;
+    if (at) {
+      if (!t.trackNo && at.trackNo) fields.trackNo = at.trackNo;
+      if (!t.trackOf && at.trackOf) fields.trackOf = at.trackOf;
+      if (!t.discNo && at.discNo && (at.discOf || 1) > 1) fields.discNo = at.discNo;
+      if (!t.discOf && at.discOf > 1) fields.discOf = at.discOf;
+    }
+    if (Object.keys(fields).length) entries.push({ id: t.id, fields });
+  }
+  if (entries.length) await library.updateEach(entries);
+  return { ok: true, changed: entries.length, album: al.album };
+}
+
 // ------------------------------------------------------------------ missing artwork finder
 
 let artJob = null;
@@ -690,6 +887,7 @@ app.whenReady().then(() => {
     setInterval(() => lastfm.flush(), 10 * 60 * 1000);
   }
   library.on('changed', (c) => send('library:changed', c));
+  library.on('writeFailed', (f) => send('toast', { error: true, text: `Couldn’t save into “${f.title}”: ${f.message}.` }));
   nativeTheme.on('updated', () => send('theme:system', nativeTheme.shouldUseDarkColors));
 
   Menu.setApplicationMenu(null);
