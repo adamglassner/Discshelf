@@ -39,6 +39,7 @@ function fromItunes(r) {
     discOf: r.discCount || 0,
     thumb: itunesArt(r.artworkUrl100, 100),
     artwork: itunesArt(r.artworkUrl100, 600),
+    albumRef: r.collectionId ? `itunes:${r.collectionId}` : '',
   };
 }
 
@@ -54,6 +55,7 @@ function fromDeezer(r) {
     trackNo: 0, trackOf: 0, discNo: 0, discOf: 0,
     thumb: (r.album && (r.album.cover_medium || r.album.cover_small)) || '',
     artwork: (r.album && (r.album.cover_xl || r.album.cover_big)) || '',
+    albumRef: r.album && r.album.id ? `deezer:${r.album.id}` : '',
   };
 }
 
@@ -67,6 +69,7 @@ function fromDeezerAlbum(r) {
     genre: '', year: 0, trackNo: 0, trackOf: r.nb_tracks || 0, discNo: 0, discOf: 0,
     thumb: r.cover_medium || r.cover_small || '',
     artwork: r.cover_xl || r.cover_big || '',
+    albumRef: r.id ? `deezer:${r.id}` : '',
   };
 }
 
@@ -138,6 +141,51 @@ class Online {
     return results.find(ok) || null;
   }
 
+  /**
+   * The track list of an album from a search result's albumRef ("itunes:123" / "deezer:456").
+   * Returns {album, artist, year, genre, tracks: [{title, artist, trackNo, trackOf, discNo, discOf, duration}]}.
+   */
+  async albumTracks(ref) {
+    const m = /^(itunes|deezer):(\d+)$/.exec(String(ref || ''));
+    if (!m) throw new Error('No track list for this result');
+    if (m[1] === 'itunes') {
+      const data = await this._json(`https://itunes.apple.com/lookup?id=${m[2]}&entity=song&limit=300`);
+      const all = data.results || [];
+      const col = all.find((r) => r.wrapperType === 'collection') || {};
+      const tracks = all.filter((r) => r.wrapperType === 'track' && r.kind === 'song').map((r) => ({
+        title: r.trackName || '', artist: r.artistName || '',
+        trackNo: r.trackNumber || 0, trackOf: r.trackCount || 0, discNo: r.discNumber || 0, discOf: r.discCount || 0,
+        duration: r.trackTimeMillis ? r.trackTimeMillis / 1000 : 0,
+      }));
+      return { album: col.collectionName || '', artist: col.artistName || '', year: yearOf(col.releaseDate), genre: col.primaryGenreName || '', tracks: sortTracks(tracks) };
+    }
+    const [album, list] = await Promise.all([
+      this._json(`https://api.deezer.com/album/${m[2]}`),
+      this._json(`https://api.deezer.com/album/${m[2]}/tracks?limit=300`),
+    ]);
+    if (album.error) throw new Error(album.error.message || 'Deezer error');
+    const items = (list.data || []);
+    const discOf = Math.max(1, ...items.map((t) => t.disk_number || 1));
+    const counts = {};
+    for (const t of items) counts[t.disk_number || 1] = (counts[t.disk_number || 1] || 0) + 1;
+    const tracks = items.map((t, i) => ({
+      title: t.title || '', artist: (t.artist && t.artist.name) || '',
+      trackNo: t.track_position || i + 1, trackOf: counts[t.disk_number || 1] || items.length,
+      discNo: t.disk_number || 1, discOf,
+      duration: t.duration || 0,
+    }));
+    const genre = album.genres && album.genres.data && album.genres.data[0] ? album.genres.data[0].name : '';
+    return { album: album.title || '', artist: (album.artist && album.artist.name) || '', year: yearOf(album.release_date), genre, tracks: sortTracks(tracks) };
+  }
+
+  /** A photo of an artist (Deezer), or null. */
+  async artistImage(name) {
+    const data = await this._json(`https://api.deezer.com/search/artist?limit=5&q=${encodeURIComponent(name)}`);
+    const want = norm(name);
+    const hit = (data.data || []).find((a) => norm(a.name) === want);
+    return hit && (hit.picture_xl || hit.picture_big) ? hit.picture_xl || hit.picture_big : null;
+  }
+
   /** Downloads an image over https. Returns {mime, data}. */
   async downloadImage(url) {
     if (!/^https:\/\//i.test(String(url))) throw new Error('Only https images can be downloaded');
@@ -153,6 +201,74 @@ class Online {
   }
 }
 
+function sortTracks(tracks) {
+  return tracks.sort((a, b) => (a.discNo || 1) - (b.discNo || 1) || (a.trackNo || 0) - (b.trackNo || 0));
+}
+
+/** Title for matching: no "01 - " prefix, no "(feat. …)", no "(2011 Remaster)", lower case. */
+function titleKey(s) {
+  return norm(String(s || '')
+    .replace(/^\s*\d{1,3}\s*[-._)]\s*/, '')
+    .replace(/\s*[([](feat|ft|with)\.?\s.*?[)\]]/gi, '')
+    .replace(/\s*-\s*(\d{4}\s*)?remaster(ed)?.*$/i, ''));
+}
+
+function words(s) { return new Set(s.split(' ').filter((w) => w.length > 1)); }
+
+/**
+ * Matches the songs you have to an album's track list.
+ * local: [{id, title, trackNo, discNo, duration, path}], album: [{title, trackNo, discNo, duration}]
+ * Returns [{id, index, how}] where index is into `album` (or -1) and how is
+ * 'title' | 'number' | 'order' | null.
+ */
+function matchTracks(local, album) {
+  const result = new Map(local.map((t) => [t.id, { id: t.id, index: -1, how: null }]));
+  const usedAlbum = new Set();
+  const pairs = [];
+  local.forEach((t) => {
+    const lk = titleKey(t.title);
+    const lw = words(lk);
+    album.forEach((a, j) => {
+      const ak = titleKey(a.title);
+      let score = 0;
+      if (lk && lk === ak) score = 100;
+      else if (lk.length > 3 && ak.length > 3 && (lk.includes(ak) || ak.includes(lk))) score = 75;
+      else {
+        const aw = words(ak);
+        const inter = [...lw].filter((w) => aw.has(w)).length;
+        const union = new Set([...lw, ...aw]).size;
+        if (union && inter / union >= 0.5) score = 50 * (inter / union) + 20;
+      }
+      const sameNumber = t.trackNo && t.trackNo === a.trackNo && (t.discNo || 1) === (a.discNo || 1);
+      if (score && sameNumber) score += 15;
+      if (score && t.duration && a.duration && Math.abs(t.duration - a.duration) < 4) score += 10;
+      if (score >= 45) pairs.push({ id: t.id, j, score });
+    });
+  });
+  pairs.sort((a, b) => b.score - a.score);
+  for (const p of pairs) {
+    const r = result.get(p.id);
+    if (r.index >= 0 || usedAlbum.has(p.j)) continue;
+    r.index = p.j; r.how = 'title'; usedAlbum.add(p.j);
+  }
+  // Then by track (and disc) number.
+  for (const t of local) {
+    const r = result.get(t.id);
+    if (r.index >= 0 || !t.trackNo) continue;
+    const j = album.findIndex((a, k) => !usedAlbum.has(k) && a.trackNo === t.trackNo && (a.discNo || 1) === (t.discNo || 1));
+    if (j >= 0) { r.index = j; r.how = 'number'; usedAlbum.add(j); }
+  }
+  // Then, if the counts line up, in file order.
+  const leftLocal = local.filter((t) => result.get(t.id).index < 0);
+  const leftAlbum = album.map((_, k) => k).filter((k) => !usedAlbum.has(k));
+  if (leftLocal.length && leftLocal.length === leftAlbum.length) {
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    leftLocal.sort((a, b) => (a.discNo || 1) - (b.discNo || 1) || (a.trackNo || 0) - (b.trackNo || 0) || collator.compare(a.path || '', b.path || ''));
+    leftLocal.forEach((t, i) => { const r = result.get(t.id); r.index = leftAlbum[i]; r.how = 'order'; });
+  }
+  return local.map((t) => result.get(t.id));
+}
+
 function sniffImage(data) {
   if (!data || data.length < 8) return null;
   if (data[0] === 0xFF && data[1] === 0xD8) return 'image/jpeg';
@@ -162,4 +278,4 @@ function sniffImage(data) {
   return null;
 }
 
-module.exports = { Online, norm, sniffImage };
+module.exports = { Online, norm, sniffImage, matchTracks, titleKey };

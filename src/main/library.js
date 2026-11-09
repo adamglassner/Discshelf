@@ -65,6 +65,7 @@ class Library extends EventEmitter {
     this.scanning = null; // {cancelled, ...progress}
     this._saveTimer = null;
     this._folderArt = new Map();
+    this.artists = {}; // artist name (lower case) -> {art, checked}
   }
 
   load() {
@@ -72,6 +73,7 @@ class Library extends EventEmitter {
     try {
       const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       this.folders = Array.isArray(data.folders) ? data.folders.filter((f) => typeof f === 'string') : [];
+      if (data.artists && typeof data.artists === 'object') this.artists = data.artists;
       for (const t of Array.isArray(data.tracks) ? data.tracks : []) {
         if (t && t.id && t.path) this.tracks.set(t.id, t);
       }
@@ -85,7 +87,7 @@ class Library extends EventEmitter {
   }
 
   snapshot() {
-    return { folders: [...this.folders], tracks: [...this.tracks.values()] };
+    return { folders: [...this.folders], tracks: [...this.tracks.values()], artists: this.artists };
   }
 
   get(id) {
@@ -108,7 +110,7 @@ class Library extends EventEmitter {
   saveNow() {
     clearTimeout(this._saveTimer);
     this._saveTimer = null;
-    const data = JSON.stringify({ version: LIBRARY_VERSION, folders: this.folders, tracks: [...this.tracks.values()] });
+    const data = JSON.stringify({ version: LIBRARY_VERSION, folders: this.folders, artists: this.artists, tracks: [...this.tracks.values()] });
     const tmp = this.file + '.tmp';
     try {
       fs.writeFileSync(tmp, data);
@@ -166,6 +168,30 @@ class Library extends EventEmitter {
     }
     if (changed.length) { this.scheduleSave(); this.emit('changed', { updated: changed }); }
     return changed.length;
+  }
+
+  /** Different details for each song (e.g. titles + track numbers from an album's track list). */
+  async updateEach(entries) {
+    const changed = [];
+    for (const { id, fields } of entries || []) {
+      const t = this.tracks.get(id);
+      if (!t) continue;
+      t.edits = { ...(t.edits || {}), ...cleanEdits(fields || {}) };
+      applyEdits(t);
+      changed.push(id);
+    }
+    if (changed.length) { this.scheduleSave(); this.emit('changed', { updated: changed }); }
+    return changed.length;
+  }
+
+  /** Remembers an artist's photo (or that none was found). */
+  async setArtistImage(name, picture) {
+    const key = String(name || '').toLowerCase();
+    if (!key) return null;
+    const art = picture ? await this._saveArt(picture) : null;
+    this.artists[key] = { art, checked: Date.now() };
+    this.scheduleSave();
+    return art;
   }
 
   /** Saves artwork for songs without emitting per-call saves (used by the missing-artwork finder). */

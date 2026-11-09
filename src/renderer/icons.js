@@ -26,6 +26,11 @@
     albums: s('<rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.5"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.5"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.5"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.5"/>'),
     back: s('<path d="M14.5 5.5 8 12l6.5 6.5"/>'),
     eq: s('<path d="M5 20v-6M5 10V4M12 20v-9M12 7V4M19 20v-4M19 12V4"/><path d="M3 14h4M10 7h4M17 16h4"/>'),
+    artists: s('<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c.8-4 3.8-6.5 7.5-6.5s6.7 2.5 7.5 6.5"/>'),
+    radio: s('<rect x="3" y="8" width="18" height="12" rx="2.5"/><path d="m7 8 9-4.5"/><circle cx="15.5" cy="14" r="2.6"/><path d="M6.5 12.5h4M6.5 15.5h4"/>'),
+    star: s('<path d="m12 3.8 2.5 5.1 5.6.8-4.1 3.9 1 5.6-5-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z"/>'),
+    starFill: f('<path d="m12 3.8 2.5 5.1 5.6.8-4.1 3.9 1 5.6-5-2.7-5 2.7 1-5.6-4.1-3.9 5.6-.8z"/>'),
+    stop: f('<rect x="6" y="6" width="12" height="12" rx="1.6"/>'),
     disc: s('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/>'),
   };
 })();

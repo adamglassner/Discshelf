@@ -6,8 +6,9 @@ const path = require('path');
 const { Readable } = require('stream');
 const { Library } = require('./library');
 const { AUDIO_EXTENSIONS } = require('./tags');
-const { Online, sniffImage } = require('./online');
+const { Online, sniffImage, matchTracks } = require('./online');
 const { Lastfm } = require('./lastfm');
+const { RadioBrowser, icyStripper, firstPlaylistUrl } = require('./radio');
 
 const SMOKE_TEST = process.argv.includes('--smoke-test');
 const APP_ID = 'com.bytehawkstudio.discshelf';
@@ -32,6 +33,45 @@ let settings = {};
 let settingsFile = '';
 const online = new Online((url, opts) => net.fetch(url, opts));
 let lastfm = null;
+let radio = null;
+let radioStream = null; // AbortController of the station being played (one at a time)
+const userAgent = () => `Discshelf/${app.getVersion()} (Bytehawk Studio; https://github.com/adamglassner/discshelf)`;
+
+/** Relays a radio station to the player: follows playlists, strips ICY metadata, reports song titles. */
+async function serveRadio(url) {
+  let target = url.searchParams.get('u') || '';
+  const id = url.searchParams.get('s') || '';
+  if (!/^https?:\/\//i.test(target)) return new Response('Bad station address', { status: 400 });
+  if (radioStream) radioStream.abort();
+  const ctl = new AbortController();
+  radioStream = ctl;
+  try {
+    let res = null;
+    for (let hop = 0; hop < 3; hop++) {
+      res = await net.fetch(target, { headers: { 'Icy-MetaData': '1', 'User-Agent': userAgent() }, signal: ctl.signal });
+      const type = (res.headers.get('content-type') || '').toLowerCase();
+      // Some stations hand out a playlist (.pls/.m3u) instead of the stream itself.
+      if (res.ok && /mpegurl|scpls|x-pls|text\/plain|text\/html/.test(type) && !/audio\/(mpeg|aac|ogg)/.test(type)) {
+        const next = firstPlaylistUrl(await res.text());
+        if (!next) break;
+        target = next;
+        continue;
+      }
+      break;
+    }
+    if (!res.ok) { send('radio:error', { id, message: `The station answered with an error (HTTP ${res.status}).` }); return new Response('Station error', { status: 502 }); }
+    const type = res.headers.get('content-type') || 'audio/mpeg';
+    const metaint = parseInt(res.headers.get('icy-metaint') || '0', 10);
+    const name = res.headers.get('icy-name');
+    if (name) send('radio:title', { id, title: null, stationName: name });
+    const body = metaint > 0 ? res.body.pipeThrough(icyStripper(metaint, (title) => send('radio:title', { id, title }))) : res.body;
+    return new Response(body, { status: 200, headers: { 'Content-Type': type.split(';')[0], 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
+  } catch (err) {
+    if (ctl.signal.aborted) return new Response('Stopped', { status: 499 });
+    send('radio:error', { id, message: 'The station isn’t responding.' });
+    return new Response('Station unreachable', { status: 502 });
+  }
+}
 
 // ------------------------------------------------------------------ Last.fm keys + session
 
@@ -83,6 +123,9 @@ const DEFAULT_SETTINGS = {
   onlineLookup: true,
   albumSort: 'artist',
   scrobble: true,
+  radioCountry: '',
+  radioFavorites: [],
+  radioRecent: [],
   lastfmSession: null, // {name, key, enc}
   lastfmOwnKeys: null, // {apiKey, secret} entered in Settings when this build has no key
   volume: 0.8,
@@ -180,6 +223,7 @@ function registerProtocol() {
       if (!track) return new Response('Not in library', { status: 404 });
       return serveFile(track.path, request);
     }
+    if (url.host === 'radio' && url.pathname === '/stream') return serveRadio(url);
     if (url.host === 'art') {
       const file = library.artPath(name);
       if (!file) return new Response('Not found', { status: 404 });
@@ -310,7 +354,9 @@ function buildMenu(name) {
     ],
     view: [
       { label: 'Songs', click: () => command('view', 'music') },
+      { label: 'Artists', click: () => command('view', 'artists') },
       { label: 'Albums', click: () => command('view', 'albums') },
+      { label: 'Radio', click: () => command('view', 'radio') },
       { type: 'separator' },
       { label: 'Style', submenu: styles },
       { label: 'Light / Dark', submenu: modes },
@@ -417,6 +463,7 @@ function registerIpc() {
       { type: 'separator' },
       { label: one ? 'Get Info' : `Get Info (${ids.length} Songs)`, accelerator: 'CmdOrCtrl+I', click: () => command('getInfo', ids) },
       { label: 'Go to Album', enabled: one, click: () => command('goToAlbum', ids[0]) },
+      { label: 'Go to Artist', enabled: one, click: () => command('goToArtist', ids[0]) },
       { label: 'Show in Explorer', enabled: one, click: () => { const t = library.get(ids[0]); if (t) shell.showItemInFolder(t.path); } },
       { type: 'separator' },
       { label: one ? 'Remove from Library' : `Remove ${ids.length} Songs from Library`, click: () => command('confirmRemove', ids) },
@@ -477,6 +524,41 @@ function registerIpc() {
     return toWire(await online.downloadImage(url));
   });
   ipcMain.handle('art:findMissing', () => findMissingArt());
+  ipcMain.handle('track:saveEach', async (_e, { entries, art, artIds }) => {
+    const n = await library.updateEach(Array.isArray(entries) ? entries : []);
+    const a = fromWire(art);
+    if (a !== undefined && Array.isArray(artIds) && artIds.length) await library.updateTracks(artIds, {}, a);
+    return n;
+  });
+  ipcMain.handle('online:albumTracks', async (_e, { ref, ids }) => {
+    if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
+    const album = await online.albumTracks(ref);
+    const local = (ids || []).map((id) => library.get(id)).filter(Boolean)
+      .map((t) => ({ id: t.id, title: t.title, trackNo: t.trackNo, discNo: t.discNo, duration: t.duration, path: t.path }));
+    return { ...album, matches: matchTracks(local, album.tracks) };
+  });
+  // Artist photos for the Artists view, fetched once per artist and cached.
+  const artistJobs = new Map();
+  ipcMain.handle('online:artistImage', async (_e, name) => {
+    const key = String(name || '').toLowerCase();
+    const known = library.artists[key];
+    if (known && (known.art || Date.now() - known.checked < 14 * 86400000)) return known.art;
+    if (!settings.onlineLookup || !key || key === 'various artists' || key === 'unknown artist') return null;
+    if (!artistJobs.has(key)) {
+      artistJobs.set(key, (async () => {
+        try {
+          const url = await online.artistImage(name);
+          const img = url ? await online.downloadImage(url) : null;
+          return await library.setArtistImage(name, img);
+        } catch {
+          return null; // offline: try again another time
+        } finally {
+          artistJobs.delete(key);
+        }
+      })());
+    }
+    return artistJobs.get(key);
+  });
   ipcMain.handle('app:openData', () => shell.openPath(app.getPath('userData')));
 
   // ---- Last.fm
@@ -495,6 +577,16 @@ function registerIpc() {
     settings.lastfmOwnKeys = apiKey && secret ? { apiKey, secret } : null;
     saveSettings(true);
     return lfStatus();
+  });
+  // ---- radio
+  ipcMain.handle('radio:search', (_e, q) => radio.search(q || {}));
+  ipcMain.handle('radio:countries', () => radio.countries());
+  ipcMain.handle('radio:click', (_e, id) => { radio.click(id); });
+  ipcMain.handle('radio:stop', () => { if (radioStream) { radioStream.abort(); radioStream = null; } });
+
+  ipcMain.handle('lastfm:artistInfo', async (_e, name) => {
+    if (!settings.onlineLookup) return null;
+    try { return await lastfm.artistInfo(String(name || '')); } catch { return null; }
   });
   ipcMain.handle('lastfm:nowPlaying', (_e, id) => {
     const t = library.get(id);
@@ -558,6 +650,7 @@ app.whenReady().then(() => {
   library = new Library(app.getPath('userData'));
   library.load();
   library.on('progress', (p) => send('scan:progress', p));
+  radio = new RadioBrowser((url, opts) => net.fetch(url, opts), userAgent());
   lastfm = new Lastfm({
     fetch: (url, opts) => net.fetch(url, opts),
     dataDir: app.getPath('userData'),

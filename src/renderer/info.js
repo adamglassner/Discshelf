@@ -191,9 +191,73 @@ window.DSModules.info = (ctx) => {
               try { stage(await api.fetchOnlineImage(x.artwork)); } catch (err) { fail(err); }
               b.disabled = false;
             }
+            // An album (or several songs): also get the album's track list for titles + track numbers.
+            if ((use === 'both' || use === 'info') && x.albumRef && (!one || !x.title)) {
+              await loadTrackList(x);
+              return;
+            }
             const what = use === 'art' ? 'Artwork' : use === 'info' ? 'Details' : 'Details and artwork';
             toast(`${what} filled in. Check the Details and Artwork tabs, then click Save.`);
           });
+        }
+
+        // ---- album track list: match each song to a track, so titles + numbers can be filled in
+        let trackList = null; // {album, artist, tracks}
+        const matchIdx = new Map(); // song id -> index into trackList.tracks (-1 = leave alone)
+        const fmtNo = (t) => (trackList.discOf > 1 ? `${t.discNo || 1}-${String(t.trackNo).padStart(2, '0')}` : String(t.trackNo || ''));
+
+        async function loadTrackList(x) {
+          const box = $r('#gi-results');
+          const keep = box.innerHTML;
+          box.innerHTML = '<p class="gi-hint"><span class="spinner"></span> Getting the album’s track list…</p>';
+          let r;
+          try {
+            r = await api.albumTracks(x.albumRef, ids);
+          } catch (err) {
+            box.innerHTML = keep;
+            fail(err);
+            return;
+          }
+          if (!r.tracks.length) { box.innerHTML = keep; toast('That album has no track list. Its details were filled in.'); return; }
+          trackList = { ...r, discOf: Math.max(1, ...r.tracks.map((t) => t.discOf || t.discNo || 1)) };
+          setField('genre', r.genre); setField('year', r.year); setField('album', r.album);
+          if (!one) setField('albumArtist', r.artist);
+          matchIdx.clear();
+          for (const m of r.matches) matchIdx.set(m.id, m.index);
+          renderMatches(r.matches, keep);
+        }
+
+        function renderMatches(matches, keepHtml) {
+          const box = $r('#gi-results');
+          const matched = matches.filter((m) => m.index >= 0).length;
+          const how = { title: 'matched by title', number: 'matched by track number', order: 'matched by file order' };
+          const opts = trackList.tracks.map((t, j) => `<option value="${j}">${esc(fmtNo(t))}. ${esc(t.title)}${t.duration ? ` (${ctx.fmtTime(t.duration)})` : ''}</option>`).join('');
+          const rows = tracks.slice().sort((a, b) => (a.discNo || 1) - (b.discNo || 1) || (a.trackNo || 0) - (b.trackNo || 0) || ctx.collator.compare(a.path, b.path)).map((t) => {
+            const m = matches.find((x) => x.id === t.id);
+            return `<div class="gi-mrow">
+              <div class="gi-mlocal"><div class="gi-mtitle">${esc(t.title)}</div><div class="gi-mfile">${esc(t.path.split(/[\\/]/).pop())}</div></div>
+              <span class="gi-marrow" aria-hidden="true">→</span>
+              <div class="gi-mpick"><select data-mid="${esc(t.id)}" aria-label="Album track for ${esc(t.title)}"><option value="-1">Leave title and number as they are</option>${opts}</select>
+              <span class="gi-mhow">${m && m.how ? how[m.how] : 'no match found'}</span></div></div>`;
+          }).join('');
+          box.innerHTML = `
+            <div class="gi-match">
+              <div class="gi-match-head"><div><b>${esc(trackList.album)}</b> — ${esc(trackList.artist)} · ${trackList.tracks.length} tracks</div>
+                <button type="button" class="linkbtn" id="gi-match-back">Back to results</button></div>
+              <p class="gi-hint">Matched ${matched} of ${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} to the album’s track list. Check each one, then click <b>Save</b> to set the titles and track numbers.</p>
+              ${rows}
+            </div>`;
+          box.querySelectorAll('select[data-mid]').forEach((sel) => { sel.value = String(matchIdx.get(sel.dataset.mid) ?? -1); });
+          box.querySelector('#gi-match-back').addEventListener('click', () => { trackList = null; box.innerHTML = keepHtml; });
+          box.addEventListener('change', (e) => {
+            const sel = e.target.closest('select[data-mid]');
+            if (sel) matchIdx.set(sel.dataset.mid, parseInt(sel.value, 10));
+          });
+          if (one) {
+            const j = matchIdx.get(t0.id);
+            if (j >= 0) { const t = trackList.tracks[j]; setField('title', t.title); setField('trackNo', t.trackNo); setField('trackOf', t.trackOf); setField('discNo', t.discNo); setField('discOf', t.discOf); }
+          }
+          toast('Album details filled in. Check the track matches, then click Save.');
         }
 
         function setField(key, value) {
@@ -224,10 +288,30 @@ window.DSModules.info = (ctx) => {
             if (!one && inp.value === '' && inp.placeholder) continue;
             fields[key] = inp.value;
           }
-          if (!Object.keys(fields).length && art === undefined) { close('cancel'); return; }
+          if (!Object.keys(fields).length && art === undefined && !trackList) { close('cancel'); return; }
           const btn = $r('#gi-save');
           btn.disabled = true;
           try {
+            if (trackList) {
+              // Each song gets its own title + numbers from the album's track list.
+              const shared = { ...fields };
+              for (const k of ['title', 'trackNo', 'discNo']) delete shared[k];
+              const various = new Set(trackList.tracks.map((t) => t.artist)).size > 1;
+              const entries = ids.map((id) => {
+                const j = matchIdx.get(id);
+                const t = j >= 0 ? trackList.tracks[j] : null;
+                const own = t ? { title: t.title, trackNo: t.trackNo, trackOf: t.trackOf, discNo: t.discNo, discOf: t.discOf } : {};
+                if (t && various && t.artist) own.artist = t.artist;
+                return { id, fields: { ...shared, ...own } };
+              });
+              const artIds = art !== undefined ? ($r('#gi-art-album')?.checked ? album.ids : ids) : null;
+              await api.saveEach(entries, art, artIds);
+              close('saved');
+              await ctx.reloadLibrary();
+              const n = entries.filter((e) => e.fields.title !== undefined).length;
+              toast(`Saved ${tracks.length === 1 ? 'the song' : `${tracks.length} songs`}${n ? `; ${n} got titles and track numbers from the album` : ''}.`);
+              return;
+            }
             const artIds = art !== undefined && $r('#gi-art-album')?.checked ? album.ids : ids;
             if (Object.keys(fields).length) await api.saveTracks(ids, fields, artIds === ids ? art : undefined);
             if (art !== undefined && (artIds !== ids || !Object.keys(fields).length)) await api.saveTracks(artIds, {}, art);

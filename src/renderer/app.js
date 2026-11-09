@@ -148,11 +148,14 @@
       }
     }
     if (state.view.startsWith('folder:') && !state.folders.includes(state.view.slice(7))) state.view = 'music';
+    state.artistImages = data.artists || {};
     mods.albums.invalidate();
+    mods.artists.invalidate();
     renderSidebar();
     recompute();
     $('#empty').hidden = state.tracks.length > 0;
     if (state.view === 'albums') mods.albums.render();
+    if (state.view === 'artists') mods.artists.render();
     if (state.view === 'settings') mods.settings.render();
   }
 
@@ -164,9 +167,11 @@
 
   const VIEWS = [
     { id: 'music', label: 'Songs', icon: 'music' },
+    { id: 'artists', label: 'Artists', icon: 'artists' },
     { id: 'albums', label: 'Albums', icon: 'albums' },
     { id: 'recent', label: 'Recently added', icon: 'recent' },
     { id: 'top', label: 'Most played', icon: 'top' },
+    { id: 'radio', label: 'Radio', icon: 'radio' },
   ];
 
   function viewTracks(view) {
@@ -184,7 +189,10 @@
 
   function renderSidebar() {
     $('#views').innerHTML = VIEWS.map((v) => {
-      const count = v.id === 'albums' ? mods.albums.all().length : viewTracks(v.id).length;
+      const count = v.id === 'albums' ? mods.albums.all().length
+        : v.id === 'artists' ? mods.artists.count()
+          : v.id === 'radio' ? 0
+            : viewTracks(v.id).length;
       return `<button type="button" class="side-item${state.view === v.id ? ' active' : ''}" data-view="${v.id}" role="listitem">
         ${I[v.icon]}<span class="label">${esc(v.label)}</span><span class="count">${count ? n(count) : ''}</span></button>`;
     }).join('');
@@ -217,15 +225,19 @@
     $('#tl-scroll').scrollTop = 0;
   }
 
-  const isSongView = (v) => v !== 'albums' && v !== 'settings';
+  const isSongView = (v) => !['albums', 'artists', 'radio', 'settings'].includes(v);
 
   /** Shows the songs list, the albums grid or the settings page in the content area. */
   function updateMode() {
-    const mode = state.view === 'albums' ? 'albums' : state.view === 'settings' ? 'settings' : 'songs';
+    const mode = ['albums', 'artists', 'radio', 'settings'].includes(state.view) ? state.view : 'songs';
     $('#content').dataset.mode = mode;
     $('#albums-view').hidden = mode !== 'albums';
+    $('#artists-view').hidden = mode !== 'artists';
+    $('#radio-view').hidden = mode !== 'radio';
     $('#settings-view').hidden = mode !== 'settings';
     if (mode === 'albums') mods.albums.render();
+    if (mode === 'artists') mods.artists.render();
+    if (mode === 'radio') mods.radio.render();
     if (mode === 'settings') { mods.settings.render(); $('#settings-view').scrollTop = 0; }
   }
 
@@ -564,8 +576,10 @@
 
   function renderStatus() {
     const rows = state.rows;
-    if (!state.tracks.length) { $('#status-text').textContent = 'Your library is empty'; return; }
+    if (!state.tracks.length && state.view !== 'radio' && state.view !== 'settings') { $('#status-text').textContent = 'Your library is empty'; return; }
     if (state.view === 'albums') { $('#status-text').textContent = mods.albums.status(); return; }
+    if (state.view === 'artists') { $('#status-text').textContent = mods.artists.status(); return; }
+    if (state.view === 'radio') { $('#status-text').textContent = state.radio ? `Listening to ${state.radio.station.name}` : 'Live radio from around the world'; return; }
     if (state.view === 'settings') { $('#status-text').textContent = `${plural(state.tracks.length, 'song', 'songs')} in your library`; return; }
     let dur = 0; let size = 0;
     for (const t of rows) { dur += t.duration || 0; size += t.size || 0; }
@@ -579,10 +593,11 @@
 
   function renderArtPane(selectedId) {
     if (!state.settings.showArtPane) return;
+    if (state.artMode === 'playing' && state.radio) { renderRadioArt(); return; }
     let t = null;
     if (state.artMode === 'playing') t = state.current;
     else {
-      const ids = selectedId ? [selectedId] : state.view === 'albums' ? mods.albums.selectedIds() : selectedIds();
+      const ids = selectedId ? [selectedId] : state.view === 'albums' ? mods.albums.selectedIds() : state.view === 'artists' ? mods.artists.selectedIds() : selectedIds();
       t = ids.length ? state.byId.get(ids[ids.length - 1]) : null;
     }
     const frame = $('#art-frame');
@@ -615,6 +630,27 @@
       <dl class="meta">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
       <div class="path">${esc(t.path)}</div>
       <div><button type="button" class="linkbtn" data-reveal="${esc(t.id)}">Show in Explorer</button></div>`;
+  }
+
+  function renderRadioArt() {
+    const st = state.radio.station;
+    const frame = $('#art-frame');
+    const want = `radio:${st.favicon}`;
+    if (frame.dataset.src !== want) {
+      frame.dataset.src = want;
+      frame.innerHTML = st.favicon ? `<img src="${esc(st.favicon)}" alt="" class="radio-logo" referrerpolicy="no-referrer">` : I.radio;
+      const img = frame.querySelector('img');
+      if (img) img.onerror = () => { frame.innerHTML = I.radio; };
+    }
+    const rows = [];
+    if (st.country) rows.push(['Country', esc(st.state ? `${st.state}, ${st.country}` : st.country)]);
+    if (st.tags.length) rows.push(['Style', esc(st.tags.join(', '))]);
+    if (st.codec || st.bitrate) rows.push(['Format', esc([st.codec, st.bitrate ? `${st.bitrate} kbps` : ''].filter(Boolean).join(' · '))]);
+    $('#art-info').innerHTML = `
+      <div class="t">${esc(state.radio.title || st.name)}</div>
+      <div class="a">${state.radio.title ? esc(st.name) : 'Live radio'}</div>
+      <dl class="meta">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+      ${st.homepage && /^https?:/.test(st.homepage) ? `<div><a class="linkbtn" href="${esc(st.homepage)}" data-external>Station website</a></div>` : ''}`;
   }
 
   // ---------------------------------------------------------------- playback
@@ -665,8 +701,33 @@
     loadAndPlay(state.byId.get(state.queue[state.order[state.pos]]));
   }
 
+  /** Plays a live station. `list` is where next / previous move to. */
+  function playRadio(station, list = []) {
+    if (!station || !station.url) return;
+    state.radio = { station, title: '', list, startedAt: Date.now() };
+    state.current = null;
+    state.play = null;
+    state.queue = [];
+    audio.src = `discshelf://radio/stream?u=${encodeURIComponent(station.url)}&s=${encodeURIComponent(station.id)}&t=${Date.now()}`;
+    audio.play().catch(() => { /* handled by the error event */ });
+    api.radioClick(station.id);
+    updateNowPlaying();
+    updateRowStates();
+    mods.albums.updatePlaying();
+    mods.artists.updatePlaying();
+    mods.radio.refreshPlaying();
+  }
+
+  function leaveRadio() {
+    if (!state.radio) return;
+    state.radio = null;
+    api.radioStop();
+    mods.radio.refreshPlaying();
+  }
+
   function loadAndPlay(t, { autoplay = true, at = 0 } = {}) {
     if (!t) return;
+    leaveRadio();
     state.current = t;
     state.counted = false;
     state.play = { id: t.id, startedAt: 0, listened: 0, lastPos: at || 0, scrobbled: false };
@@ -705,8 +766,9 @@
     loadAndPlay(state.byId.get(state.queue[state.order[pos]]));
   }
 
-  function next() { advance(1); }
+  function next() { if (state.radio) { mods.radio.step(1); return; } advance(1); }
   function prev() {
+    if (state.radio) { mods.radio.step(-1); return; }
     if (audio.currentTime > 3 || state.pos <= 0 && state.settings.repeat !== 'all') {
       if (state.current) { audio.currentTime = 0; if (audio.paused) audio.play().catch(() => {}); }
       return;
@@ -715,6 +777,12 @@
   }
 
   function playPause() {
+    if (state.radio) {
+      // Live radio: pausing stops the stream; playing reconnects so you hear it live, not from where it stopped.
+      if (audio.paused) playRadio(state.radio.station, state.radio.list);
+      else { audio.pause(); api.radioStop(); }
+      return;
+    }
     if (!state.current) {
       const ids = selectedIds();
       playRows(ids.length ? state.rowIndex.get(ids[0]) : 0);
@@ -741,16 +809,41 @@
   }
 
   function updatePlayButton() {
-    const playing = !audio.paused && !!state.current;
+    const active = !!state.current || !!state.radio;
+    const playing = !audio.paused && active;
     const b = $('#btn-play');
-    b.innerHTML = playing ? I.pause : I.play;
-    b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = state.current ? (playing ? 'playing' : 'paused') : 'none';
+    b.innerHTML = playing ? (state.radio ? I.stop : I.pause) : I.play;
+    b.setAttribute('aria-label', playing ? (state.radio ? 'Stop' : 'Pause') : 'Play');
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = active ? (playing ? 'playing' : 'paused') : 'none';
   }
 
   function updateNowPlaying() {
     const t = state.current;
     const art = $('#fp-art');
+    $('#faceplate').classList.toggle('live', !!state.radio);
+    if (state.radio) {
+      const r = state.radio;
+      const st = r.station;
+      $('#fp-title').textContent = r.title || st.name;
+      $('#fp-sub').textContent = r.title ? st.name : ['Live radio', st.country].filter(Boolean).join(' · ');
+      const want = `radio:${st.favicon}`;
+      if (art.dataset.src !== want) {
+        art.dataset.src = want;
+        art.innerHTML = st.favicon ? `<img src="${esc(st.favicon)}" alt="" class="radio-logo" referrerpolicy="no-referrer">` : I.radio;
+        const img = art.querySelector('img');
+        if (img) img.onerror = () => { art.innerHTML = I.radio; };
+      }
+      $('#seek').disabled = true;
+      document.title = `${r.title || st.name} · Discshelf`;
+      updatePlayButton();
+      updateTime();
+      if (state.artMode === 'playing') renderArtPane();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: r.title || st.name, artist: r.title ? st.name : 'Live radio', album: '', artwork: st.favicon ? [{ src: st.favicon }] : [] });
+      }
+      return;
+    }
+    delete art.dataset.src;
     if (!t) {
       $('#fp-title').textContent = 'Discshelf';
       $('#fp-sub').textContent = state.tracks.length ? 'Double-click a song to play it' : 'Add music to get started';
@@ -771,6 +864,7 @@
     updateTime();
     updateRowStates();
     mods.albums.updatePlaying();
+    mods.artists.updatePlaying();
     if (state.artMode === 'playing') renderArtPane();
 
     if ('mediaSession' in navigator) {
@@ -784,6 +878,14 @@
   function setRangePct(el, pct) { el.style.setProperty('--pct', `${Math.max(0, Math.min(100, pct))}%`); }
 
   function updateTime() {
+    if (state.radio) {
+      $('#fp-elapsed').textContent = fmtTime(audio.currentTime || 0);
+      $('#fp-remaining').textContent = 'LIVE';
+      const seek = $('#seek');
+      seek.value = 1000;
+      setRangePct(seek, audio.paused ? 0 : 100);
+      return;
+    }
     const d = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (state.current?.duration || 0);
     const c = audio.currentTime || 0;
     $('#fp-elapsed').textContent = fmtTime(c);
@@ -826,8 +928,8 @@
 
   let lastPositionSave = 0;
   function setupAudio() {
-    audio.addEventListener('play', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); });
-    audio.addEventListener('pause', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); saveSettings({ lastPosition: audio.currentTime || 0 }); });
+    audio.addEventListener('play', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); });
+    audio.addEventListener('pause', () => { updatePlayButton(); updateRowStates(); mods.albums.updatePlaying(); mods.artists.updatePlaying(); if (state.radio) return; saveSettings({ lastPosition: audio.currentTime || 0 }); });
     audio.addEventListener('playing', () => {
       state.errorsInARow = 0;
       const p = state.play;
@@ -846,6 +948,7 @@
     });
     audio.addEventListener('durationchange', updateTime);
     audio.addEventListener('ended', () => {
+      if (state.radio) { toast(`${state.radio.station.name} stopped broadcasting.`); updatePlayButton(); return; }
       countPlay();
       if (state.settings.repeat === 'one') {
         state.play = { id: state.current.id, startedAt: 0, listened: 0, lastPos: 0, scrobbled: false };
@@ -854,6 +957,11 @@
       advance(1, { fromEnded: true });
     });
     audio.addEventListener('error', () => {
+      if (state.radio) {
+        toast(`Couldn’t play ${state.radio.station.name}. The station may be offline; try another one.`, 'error');
+        updatePlayButton();
+        return;
+      }
       if (!state.current || !audio.getAttribute('src')) return;
       const t = state.current;
       const why = t.codec === 'ALAC' ? 'Apple Lossless (ALAC) files can’t be played yet' : 'the file is missing or in a format Discshelf can’t play';
@@ -1127,6 +1235,7 @@
       case 'equalizer': mods.eq.open(); break;
       case 'getInfo': getInfo(arg); break;
       case 'goToAlbum': mods.albums.openForTrack(arg); break;
+      case 'goToArtist': mods.artists.openForTrack(arg); break;
       case 'shuffleIds': playQueue(arg, -1, { shuffle: true }); break;
       case 'findMissingArt': findMissingArt(); break;
       case 'showFilters': saveSettings({ showFilters: arg }); applyLayout(); break;
@@ -1160,7 +1269,7 @@
       if (inInput) return;
       if (ctrl && e.key.toLowerCase() === 'i') {
         e.preventDefault();
-        const ids = state.view === 'albums' ? mods.albums.selectedIds() : selectedIds();
+        const ids = state.view === 'albums' ? mods.albums.selectedIds() : state.view === 'artists' ? mods.artists.selectedIds() : selectedIds();
         if (ids.length) getInfo(ids); else if (state.current) getInfo([state.current.id]);
         return;
       }
@@ -1183,14 +1292,15 @@
       t = setTimeout(() => {
         state.search = search.value.trim();
         state.selected.clear();
-        if (state.view === 'settings') setView('music');
+        if (state.view === 'settings' || state.view === 'radio') setView('music');
         recompute({ keepScroll: false });
         if (state.view === 'albums') { if (mods.albums.isDetailOpen()) mods.albums.back(); else mods.albums.render(); }
+        if (state.view === 'artists') mods.artists.render();
       }, 120);
     });
     search.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { search.value = ''; search.dispatchEvent(new Event('input')); search.blur(); }
-      if (e.key === 'Enter' && state.view !== 'albums') { e.preventDefault(); clearTimeout(t); state.search = search.value.trim(); recompute({ keepScroll: false }); playRows(0); }
+      if (e.key === 'Enter' && isSongView(state.view)) { e.preventDefault(); clearTimeout(t); state.search = search.value.trim(); recompute({ keepScroll: false }); playRows(0); }
       if (e.key === 'ArrowDown') { e.preventDefault(); $('#tracklist').focus(); if (state.rows.length) selectIndex(0); }
     });
   }
@@ -1241,6 +1351,8 @@
       });
     }
     $('#art-info').addEventListener('click', (e) => {
+      const ext = e.target.closest('a[data-external]');
+      if (ext) { e.preventDefault(); window.open(ext.href); return; }
       const b = e.target.closest('[data-reveal]');
       if (b) api.showInFolder(b.dataset.reveal);
     });
@@ -1252,6 +1364,7 @@
   const ctx = {
     api, I, $, $$, esc, fold, n, plural, fmtTime, fmtTotal, fmtSize, artUrl, formatLine, toast, modal, collator, sortName,
     isInside, state, audio, saveSettings, setAppearance, setView, playQueue, reloadLibrary, renderStatus, renderArtPane,
+    playRadio, renderSidebar: () => renderSidebar(), clearSearch: () => { $('#search').value = ''; state.search = ''; recompute(); },
     shortcuts, getInfo: (ids) => getInfo(ids), findMissingArt: () => findMissingArt(),
     onEqChange: () => { updateEqButton(); mods.settings.refreshEq(); },
   };
@@ -1291,6 +1404,8 @@
     state.systemDark = systemDark;
     applyTheme();
     mods.albums = window.DSModules.albums(ctx);
+    mods.artists = window.DSModules.artists(ctx);
+    mods.radio = window.DSModules.radio(ctx);
     mods.eq = window.DSModules.eq(ctx);
     mods.info = window.DSModules.info(ctx);
     mods.settings = window.DSModules.settings(ctx);
@@ -1300,6 +1415,8 @@
     updateEqButton();
     setupChrome();
     mods.albums.setup();
+    mods.artists.setup();
+    mods.radio.setup();
     mods.settings.setup();
     setupFilters();
     setupTrackList();
@@ -1327,6 +1444,14 @@
     api.onScanProgress(onScanProgress);
     api.onLibraryChanged(() => reloadLibrary());
     api.onSystemTheme((dark) => { state.systemDark = dark; applyTheme(); });
+    api.onRadioTitle(({ id, title }) => {
+      if (!state.radio || state.radio.station.id !== id || title === null) return;
+      state.radio.title = title;
+      updateNowPlaying();
+    });
+    api.onRadioError(({ id, message }) => {
+      if (state.radio && state.radio.station.id === id) toast(`${state.radio.station.name}: ${message}`, 'error');
+    });
     updateMode();
     window.__discshelfReady = true;
     window.__discshelfTest = { level: () => mods.eq.level(), state };

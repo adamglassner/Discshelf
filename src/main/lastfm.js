@@ -143,6 +143,33 @@ class Lastfm extends EventEmitter {
     this.emit('status', this.status());
   }
 
+  // ---------------------------------------------------------------- artist info (no sign-in needed)
+
+  /** Bio, tags and similar artists. Returns null when there's no API key or Last.fm doesn't know the artist. */
+  async artistInfo(name) {
+    const keys = this.getKeys();
+    if (!keys || !keys.apiKey || !name) return null;
+    this._infoCache = this._infoCache || new Map();
+    const k = name.toLowerCase();
+    if (this._infoCache.has(k)) return this._infoCache.get(k);
+    const qs = new URLSearchParams({ method: 'artist.getinfo', artist: name, autocorrect: '1', api_key: keys.apiKey, format: 'json' });
+    const res = await this.fetch(`${API}?${qs}`);
+    const data = await res.json().catch(() => null);
+    if (!data || data.error || !data.artist) { this._infoCache.set(k, null); return null; }
+    const a = data.artist;
+    const strip = (html) => String(html || '').replace(/<a [^>]*>Read more on Last\.fm<\/a>\.?/i, '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+    const info = {
+      name: a.name,
+      url: a.url,
+      bio: strip(a.bio && a.bio.summary),
+      tags: ((a.tags && a.tags.tag) || []).map((t) => t.name).slice(0, 5),
+      similar: ((a.similar && a.similar.artist) || []).map((x) => x.name).slice(0, 8),
+      listeners: a.stats ? parseInt(a.stats.listeners, 10) || 0 : 0,
+    };
+    this._infoCache.set(k, info);
+    return info;
+  }
+
   // ---------------------------------------------------------------- scrobbling
 
   static params(track) {

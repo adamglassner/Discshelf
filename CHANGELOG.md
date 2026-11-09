@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Artists:** a new Artists view, like iTunes: every artist with their photo and how many albums and songs you have, and an artist page with Play and Shuffle, each album with its songs, and an About box (bio, styles and similar artists from Last.fm; similar artists in your library are links). Right-click a song and choose **Go to Artist**.
+- **Radio:** listen to live radio from around the world (from the free Radio Browser directory). Browse top stations by country, pick a genre, or search by name; star stations to keep them in Favorites. The player shows the song the station is playing, the equalizer works on radio too, and Next / Previous move between stations.
+- **Get Info:** when you look up an album online and use it, Discshelf now gets the album's track list and gives each song its title and track number (and disc number). It matches your songs by title, then track number, then file order, and shows the matches so you can fix any before saving.
+
 ## 0.2.0
 
 - **Albums:** a new Albums view in the library, like iTunes: Recently Added along the top, then all your albums as artwork. Click an album to open its page (big artwork, song list, Play, Shuffle, Get Info); hover over a cover to play it straight away. Right-click a song and choose **Go to Album**.

@@ -4,6 +4,10 @@ A music player for the music on your computer, from Bytehawk Studio. It takes it
 
 ![Discshelf's Albums view](docs/screenshots/albums.png)
 
+| Artists | Radio |
+|---|---|
+| ![Artists view](docs/screenshots/artists.png) | ![Radio](docs/screenshots/radio.png) |
+
 | Classic light | Classic dark |
 |---|---|
 | ![Classic light](docs/screenshots/classic-light.png) | ![Classic dark](docs/screenshots/classic-dark.png) |
@@ -24,12 +28,14 @@ The builds aren't code-signed yet, so Windows SmartScreen may say it "protected 
 ## What it does
 
 - **Add music:** choose music folders (**File → Add Folder**, Ctrl+O), add single files, or drag folders and songs into the window. Discshelf finds **MP3, AAC (M4A), FLAC, Ogg Vorbis, Opus and WAV** files, reads their tags and cover art (embedded, or `cover.jpg` / `folder.jpg` next to the music) and adds them to your library. Your files stay where they are. New songs are picked up when Discshelf starts, or press **F5**.
-- **Library:** Songs, Albums, Recently added, Most played, and one entry for each music folder.
+- **Library:** Songs, Artists, Albums, Recently added, Most played, Radio, and one entry for each music folder.
+- **Artists:** every artist with a photo; an artist page with their albums and songs, plus a bio and similar artists from Last.fm.
 - **Albums:** an iTunes-style grid with Recently Added along the top and all your albums below. Open an album for its artwork and song list, then Play or Shuffle it.
 - **Songs:** Genre → Artist → Album filter panes, a sortable song list (click a column header) and search (Ctrl+F).
 - **Play:** double-click a song or press Enter. Play/pause, next/previous, seek, volume, shuffle, and repeat (all or one song). Your keyboard's media keys work too.
 - **Equalizer:** 10 bands, preamp and presets (button in the player bar, or **Playback → Equalizer**).
-- **Get Info** (Ctrl+I, or right-click a song or album): edit song details and artwork yourself, or look them up on iTunes and Deezer. **File → Find Missing Album Artwork** fills in covers for your whole library. Edits are kept in your Discshelf library; your music files aren't changed.
+- **Radio:** live stations from around the world (Radio Browser directory): top stations by country, genres, search, and favorites. Shows the song the station is playing.
+- **Get Info** (Ctrl+I, or right-click a song or album): edit song details and artwork yourself, or look them up on iTunes and Deezer. Using an album result also gives each song its title and track number from the album's track list. **File → Find Missing Album Artwork** fills in covers for your whole library. Edits are kept in your Discshelf library; your music files aren't changed.
 - **Last.fm:** connect your account in **Settings** to scrobble what you play.
 - **Themes:** **Modern** or **Classic** (Songbird's look), each in light or dark, or following Windows (**Settings → Appearance**).
 
@@ -72,8 +78,8 @@ Discshelf is an Electron app with no other runtime dependencies. The tag reader 
 |---|---|
 | `src/main/` | Main process: window, menus, the `discshelf://` protocol that streams songs and artwork, library scanning |
 | `src/main/tags/` | Reads tags, duration, format details and cover art from each file type |
-| `src/main/online.js`, `src/main/lastfm.js` | iTunes / Deezer lookups, Last.fm sign-in and scrobbling |
-| `src/renderer/` | The window: layout, themes, songs and albums views, Get Info, equalizer, settings, player |
+| `src/main/online.js`, `src/main/lastfm.js`, `src/main/radio.js` | iTunes / Deezer lookups, Last.fm sign-in, scrobbling and artist info, the radio directory and stream relay |
+| `src/renderer/` | The window: layout, themes, songs / artists / albums / radio views, Get Info, equalizer, settings, player |
 | `test/` | Tests and small fixture files (`npm test`) |
 | `design/mockups/` | Early design mockups for the desktop, mobile and server apps |
 
