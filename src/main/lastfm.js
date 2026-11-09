@@ -176,11 +176,26 @@ class Lastfm extends EventEmitter {
     return {
       artist: track.artist,
       track: track.title,
+      chosenByUser: track.fromRadio ? '0' : undefined,
       album: track.album || undefined,
       albumArtist: track.albumArtist && track.albumArtist !== track.artist ? track.albumArtist : undefined,
       duration: track.duration ? Math.round(track.duration) : undefined,
       trackNumber: track.trackNo || undefined,
     };
+  }
+
+  /** Length of a song in seconds, according to Last.fm (0 when it doesn't know). Used for radio songs. */
+  async trackDuration(artist, title) {
+    const keys = this.getKeys();
+    if (!keys || !keys.apiKey || !artist || !title) return 0;
+    const qs = new URLSearchParams({ method: 'track.getInfo', artist, track: title, autocorrect: '1', api_key: keys.apiKey, format: 'json' });
+    try {
+      const res = await this.fetch(`${API}?${qs}`);
+      const data = await res.json();
+      return data && data.track && data.track.duration ? Math.round(parseInt(data.track.duration, 10) / 1000) : 0;
+    } catch {
+      return 0;
+    }
   }
 
   async nowPlaying(track) {

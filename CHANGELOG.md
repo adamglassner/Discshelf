@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- **Changes are saved into the music files.** Details and artwork you change in Get Info (by hand, from an online lookup, or with Find Missing Album Artwork) are now written into the files themselves, so other players and Windows see them too. Works with MP3, FLAC, M4A (AAC and Apple Lossless), Ogg Vorbis, Opus and WAV. Each file is written to a copy first, read back and checked, and only then swapped in for the original; the audio itself isn't touched. You can turn this off in Settings, and Settings offers to save changes you made in 0.2 and 0.3 into the files.
+- **Radio songs are scrobbled to Last.fm.** When a station says what it's playing (most music stations do), Discshelf shows the artist and title, sends "Now playing" to Last.fm and scrobbles the song once you've heard enough of it (half the song or 4 minutes, using the song's length from Last.fm; 2 minutes when Last.fm doesn't know it). Station names, ads and announcements aren't scrobbled. The album art pane shows the scrobble status and the songs heard recently on the station.
+
 ## 0.3.0
 
 - **Artists:** a new Artists view, like iTunes: every artist with their photo and how many albums and songs you have, and an artist page with Play and Shuffle, each album with its songs, and an About box (bio, styles and similar artists from Last.fm; similar artists in your library are links). Right-click a song and choose **Go to Artist**.

@@ -102,7 +102,9 @@ window.DSModules.info = (ctx) => {
         <button type="button" class="linkbtn" id="gi-reveal">Show in Explorer</button>
       </section>` : ''}
 
-      <p class="gi-note">Changes are saved in your Discshelf library. Your music files aren’t changed.</p>
+      <p class="gi-note">${state.settings.writeTags !== false
+    ? 'Changes are saved into the music files and your Discshelf library.'
+    : 'Changes are saved in your Discshelf library only (saving into the music files is turned off in Settings).'}</p>
       <div class="actions"><button type="button" class="btn" data-result="cancel">Cancel</button><button type="button" class="btn primary" id="gi-save">Save</button></div>`;
 
     await ctx.modal(html, {
@@ -305,19 +307,22 @@ window.DSModules.info = (ctx) => {
                 return { id, fields: { ...shared, ...own } };
               });
               const artIds = art !== undefined ? ($r('#gi-art-album')?.checked ? album.ids : ids) : null;
-              await api.saveEach(entries, art, artIds);
+              const res = await api.saveEach(entries, art, artIds);
               close('saved');
               await ctx.reloadLibrary();
               const n = entries.filter((e) => e.fields.title !== undefined).length;
               toast(`Saved ${tracks.length === 1 ? 'the song' : `${tracks.length} songs`}${n ? `; ${n} got titles and track numbers from the album` : ''}.`);
+              reportFiles([res]);
               return;
             }
             const artIds = art !== undefined && $r('#gi-art-album')?.checked ? album.ids : ids;
-            if (Object.keys(fields).length) await api.saveTracks(ids, fields, artIds === ids ? art : undefined);
-            if (art !== undefined && (artIds !== ids || !Object.keys(fields).length)) await api.saveTracks(artIds, {}, art);
+            const results = [];
+            if (Object.keys(fields).length) results.push(await api.saveTracks(ids, fields, artIds === ids ? art : undefined));
+            if (art !== undefined && (artIds !== ids || !Object.keys(fields).length)) results.push(await api.saveTracks(artIds, {}, art));
             close('saved');
             await ctx.reloadLibrary();
             toast(one ? 'Song info saved.' : `Saved ${tracks.length} songs.`);
+            reportFiles(results);
           } catch (err) {
             btn.disabled = false;
             fail(err);
@@ -325,6 +330,14 @@ window.DSModules.info = (ctx) => {
         });
       },
     });
+  }
+
+  /** Tells the person about any music files the changes couldn't be saved into. */
+  function reportFiles(results) {
+    const failed = results.flatMap((r) => (r && r.failed) || []);
+    if (!failed.length) return;
+    const first = failed[0];
+    toast(`Saved in your library, but not into ${failed.length === 1 ? `“${first.title}”` : `${failed.length} files`}: ${first.message}.`, 'error');
   }
 
   return { open };

@@ -6,6 +6,7 @@ const path = require('path');
 const { Readable } = require('stream');
 const { Library } = require('./library');
 const { AUDIO_EXTENSIONS } = require('./tags');
+const { writeTags } = require('./tags/writer');
 const { Online, sniffImage, matchTracks } = require('./online');
 const { Lastfm } = require('./lastfm');
 const { RadioBrowser, icyStripper, firstPlaylistUrl } = require('./radio');
@@ -123,6 +124,7 @@ const DEFAULT_SETTINGS = {
   onlineLookup: true,
   albumSort: 'artist',
   scrobble: true,
+  writeTags: true, // save Get Info changes into the music files
   radioCountry: '',
   radioFavorites: [],
   radioRecent: [],
@@ -525,11 +527,17 @@ function registerIpc() {
   });
   ipcMain.handle('art:findMissing', () => findMissingArt());
   ipcMain.handle('track:saveEach', async (_e, { entries, art, artIds }) => {
-    const n = await library.updateEach(Array.isArray(entries) ? entries : []);
+    const r = await library.updateEach(Array.isArray(entries) ? entries : []);
     const a = fromWire(art);
-    if (a !== undefined && Array.isArray(artIds) && artIds.length) await library.updateTracks(artIds, {}, a);
-    return n;
+    if (a !== undefined && Array.isArray(artIds) && artIds.length) {
+      const r2 = await library.updateTracks(artIds, {}, a);
+      r.written += r2.written;
+      r.failed.push(...r2.failed);
+    }
+    return r;
   });
+  ipcMain.handle('library:pendingEdits', () => library.pendingEdits().length);
+  ipcMain.handle('library:writePending', () => library.writePendingEdits((p) => send('tags:progress', p)));
   ipcMain.handle('online:albumTracks', async (_e, { ref, ids }) => {
     if (!settings.onlineLookup) throw new Error('Online lookups are turned off in Settings');
     const album = await online.albumTracks(ref);
@@ -587,6 +595,21 @@ function registerIpc() {
   ipcMain.handle('lastfm:artistInfo', async (_e, name) => {
     if (!settings.onlineLookup) return null;
     try { return await lastfm.artistInfo(String(name || '')); } catch { return null; }
+  });
+  // Radio songs come from the station's "Artist - Title" metadata, not the library.
+  const radioSong = (song) => ({
+    artist: String(song?.artist || '').slice(0, 300), title: String(song?.title || '').slice(0, 300), fromRadio: true,
+  });
+  ipcMain.handle('lastfm:radioNowPlaying', async (_e, song) => {
+    const s = radioSong(song);
+    if (!settings.scrobble || !s.artist || !s.title) return 0;
+    lastfm.nowPlaying(s);
+    return lastfm.trackDuration(s.artist, s.title);
+  });
+  ipcMain.handle('lastfm:radioScrobble', (_e, { song, startedAt }) => {
+    const s = radioSong(song);
+    if (!settings.scrobble || !s.artist || !s.title || !Number.isFinite(startedAt)) return false;
+    return lastfm.scrobble(s, startedAt);
   });
   ipcMain.handle('lastfm:nowPlaying', (_e, id) => {
     const t = library.get(id);
@@ -649,6 +672,8 @@ app.whenReady().then(() => {
   loadSettings();
   library = new Library(app.getPath('userData'));
   library.load();
+  library.tagWriter = writeTags;
+  library.shouldWriteFiles = () => settings.writeTags !== false;
   library.on('progress', (p) => send('scan:progress', p));
   radio = new RadioBrowser((url, opts) => net.fetch(url, opts), userAgent());
   lastfm = new Lastfm({

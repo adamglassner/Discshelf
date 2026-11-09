@@ -66,6 +66,9 @@ class Library extends EventEmitter {
     this._saveTimer = null;
     this._folderArt = new Map();
     this.artists = {}; // artist name (lower case) -> {art, checked}
+    // Saving changes into the music files themselves (set up by the main process).
+    this.tagWriter = null; // async (path, fields, art) => …
+    this.shouldWriteFiles = () => false;
   }
 
   load() {
@@ -166,22 +169,92 @@ class Library extends EventEmitter {
       applyEdits(t);
       changed.push(id);
     }
-    if (changed.length) { this.scheduleSave(); this.emit('changed', { updated: changed }); }
-    return changed.length;
+    if (changed.length) this.scheduleSave();
+    const files = await this._writeFiles(changed.map((id) => ({ id, fields: edits, art: art === undefined ? undefined : art && art.data ? art : null })));
+    if (changed.length) this.emit('changed', { updated: changed });
+    return { count: changed.length, ...files };
+  }
+
+  /**
+   * Saves changes into the music files (when that's turned on). The library already has the changes;
+   * once a file has them too, they're dropped from the library's own list of edits.
+   * Returns {written, failed: [{id, title, message}]}.
+   */
+  async _writeFiles(jobs, onProgress) {
+    const result = { written: 0, failed: [] };
+    if (!this.tagWriter || !this.shouldWriteFiles()) return result;
+    let done = 0;
+    for (const job of jobs) {
+      const t = this.tracks.get(job.id);
+      if (!t || (!Object.keys(job.fields || {}).length && job.art === undefined)) { done++; continue; }
+      try {
+        await this.tagWriter(t.path, job.fields || {}, job.art);
+        const st = await fs.promises.stat(t.path);
+        t.size = st.size;
+        t.mtime = Math.round(st.mtimeMs);
+        if (t.edits) {
+          for (const k of Object.keys(job.fields || {})) delete t.edits[k];
+          if (job.art !== undefined) delete t.edits.art;
+          if (!Object.keys(t.edits).length) delete t.edits;
+        }
+        result.written++;
+      } catch (err) {
+        result.failed.push({ id: t.id, title: t.title, message: err.message });
+      }
+      done++;
+      if (onProgress) onProgress({ done, total: jobs.length, written: result.written, failed: result.failed.length, current: t.title });
+    }
+    this.scheduleSave();
+    return result;
+  }
+
+  /** Songs whose changes are only in the library so far (e.g. edited before saving into files was on). */
+  pendingEdits() {
+    return [...this.tracks.values()].filter((t) => t.edits && Object.keys(t.edits).length);
+  }
+
+  /** Saves every library-only change into the music files. */
+  async writePendingEdits(onProgress) {
+    const jobs = [];
+    for (const t of this.pendingEdits()) {
+      const fields = { ...t.edits };
+      delete fields.art;
+      let art;
+      if ('art' in t.edits) {
+        if (!t.edits.art) art = null;
+        else {
+          const file = this.artPath(t.edits.art);
+          try {
+            const data = await fs.promises.readFile(file);
+            const ext = path.extname(file).slice(1);
+            art = { mime: ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg', data };
+          } catch { art = undefined; }
+        }
+      }
+      jobs.push({ id: t.id, fields, art });
+    }
+    const r = await this._writeFiles(jobs, onProgress);
+    this.emit('changed', { updated: jobs.map((j) => j.id) });
+    return { total: jobs.length, ...r };
   }
 
   /** Different details for each song (e.g. titles + track numbers from an album's track list). */
   async updateEach(entries) {
     const changed = [];
+    const jobs = [];
     for (const { id, fields } of entries || []) {
       const t = this.tracks.get(id);
       if (!t) continue;
-      t.edits = { ...(t.edits || {}), ...cleanEdits(fields || {}) };
+      const e = cleanEdits(fields || {});
+      t.edits = { ...(t.edits || {}), ...e };
       applyEdits(t);
       changed.push(id);
+      jobs.push({ id, fields: e });
     }
-    if (changed.length) { this.scheduleSave(); this.emit('changed', { updated: changed }); }
-    return changed.length;
+    if (changed.length) this.scheduleSave();
+    const files = await this._writeFiles(jobs);
+    if (changed.length) this.emit('changed', { updated: changed });
+    return { count: changed.length, ...files };
   }
 
   /** Remembers an artist's photo (or that none was found). */

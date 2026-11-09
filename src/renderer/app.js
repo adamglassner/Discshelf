@@ -646,10 +646,22 @@
     if (st.country) rows.push(['Country', esc(st.state ? `${st.state}, ${st.country}` : st.country)]);
     if (st.tags.length) rows.push(['Style', esc(st.tags.join(', '))]);
     if (st.codec || st.bitrate) rows.push(['Format', esc([st.codec, st.bitrate ? `${st.bitrate} kbps` : ''].filter(Boolean).join(' · '))]);
+    const r = state.radio;
+    const lf = mods.settings.lastfm();
+    let scrobble = '';
+    if (r.song && lf.connected && state.settings.scrobble !== false) {
+      scrobble = `<div class="radio-scrobble">${r.song.scrobbled ? 'Scrobbled to Last.fm' : 'Will be scrobbled to Last.fm'}</div>`;
+    } else if (r.title && !r.song) {
+      scrobble = '<div class="radio-scrobble muted">Not a song (won’t be scrobbled)</div>';
+    }
+    const history = (r.history || []).slice(1, 6);
     $('#art-info').innerHTML = `
-      <div class="t">${esc(state.radio.title || st.name)}</div>
-      <div class="a">${state.radio.title ? esc(st.name) : 'Live radio'}</div>
+      <div class="t">${esc(r.song ? r.song.title : (r.title || st.name))}</div>
+      <div class="a">${r.song ? esc(r.song.artist) : r.title ? esc(st.name) : 'Live radio'}</div>
+      ${r.song ? `<div class="b">on ${esc(st.name)}</div>` : ''}
+      ${scrobble}
       <dl class="meta">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+      ${history.length ? `<div class="radio-history"><div class="rh-head">Recently heard</div>${history.map((h) => `<div class="rh-item">${esc(h.text)}</div>`).join('')}</div>` : ''}
       ${st.homepage && /^https?:/.test(st.homepage) ? `<div><a class="linkbtn" href="${esc(st.homepage)}" data-external>Station website</a></div>` : ''}`;
   }
 
@@ -824,8 +836,8 @@
     if (state.radio) {
       const r = state.radio;
       const st = r.station;
-      $('#fp-title').textContent = r.title || st.name;
-      $('#fp-sub').textContent = r.title ? st.name : ['Live radio', st.country].filter(Boolean).join(' · ');
+      $('#fp-title').textContent = r.song ? r.song.title : (r.title || st.name);
+      $('#fp-sub').textContent = r.song ? `${r.song.artist} · ${st.name}` : r.title ? st.name : ['Live radio', st.country].filter(Boolean).join(' · ');
       const want = `radio:${st.favicon}`;
       if (art.dataset.src !== want) {
         art.dataset.src = want;
@@ -910,9 +922,61 @@
     });
   }
 
+  /**
+   * A station's "Artist - Title" metadata → {artist, title}, or null for station IDs, ads and the like.
+   */
+  function parseRadioSong(text, station) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t || /https?:|www\.|\.com\b/i.test(t)) return null;
+    if (/\b(advert|advertisement|commercial|jingle|station id|sponsor|promo)\b/i.test(t)) return null;
+    const m = /^(.+?)\s+[-–—]\s+(.+)$/.exec(t);
+    if (!m) return null;
+    const artist = m[1].trim();
+    const title = m[2].replace(/\s*\[[^\]]*\]\s*$/, '').trim();
+    const name = (station.name || '').toLowerCase();
+    if (!artist || !title || artist.length > 200 || title.length > 200) return null;
+    if (name && (artist.toLowerCase() === name || title.toLowerCase() === name)) return null;
+    if (/^(unknown|various|n\/a|-+)$/i.test(artist) || /^(unknown|untitled|n\/a)$/i.test(title)) return null;
+    return { artist, title };
+  }
+
+  /** A new song started on the radio: remember it, send "Now playing" and get its length for scrobbling. */
+  function onRadioSong(text) {
+    const r = state.radio;
+    r.history = r.history || [];
+    if (text && (!r.history[0] || r.history[0].text !== text)) r.history.unshift({ text, at: Date.now() });
+    r.history = r.history.slice(0, 8);
+    const song = parseRadioSong(text, r.station);
+    r.song = song ? { ...song, startedAt: Date.now(), listened: 0, lastPos: audio.currentTime || 0, scrobbled: false, duration: 0 } : null;
+    if (song && state.settings.scrobble !== false && !audio.paused) {
+      const cur = r.song;
+      api.lastfmRadioNowPlaying(song).then((d) => { cur.duration = d || 0; }).catch(() => {});
+    }
+  }
+
+  /** Radio: counts how long the current song has been heard, and scrobbles it like a library song
+   *  (half its length or 4 minutes; 2 minutes when Last.fm doesn't know how long it is). */
+  function trackRadioListening() {
+    const song = state.radio && state.radio.song;
+    if (!song || audio.paused) return;
+    const pos = audio.currentTime;
+    const d = pos - song.lastPos;
+    if (d > 0 && d < 1.5) song.listened += d;
+    song.lastPos = pos;
+    if (song.scrobbled || state.settings.scrobble === false) return;
+    if (song.duration && song.duration <= 30) return;
+    const need = song.duration ? Math.min(song.duration / 2, 240) : 120;
+    if (song.listened >= need) {
+      song.scrobbled = true;
+      api.lastfmRadioScrobble({ artist: song.artist, title: song.title }, song.startedAt);
+      if (state.artMode === 'playing') renderArtPane();
+    }
+  }
+
   /** Adds up how long the current song has actually been heard (not skipped over) and scrobbles it
    *  to Last.fm once that passes half the song or 4 minutes. */
   function trackListening() {
+    if (state.radio) { trackRadioListening(); return; }
     const p = state.play;
     if (!p || audio.paused || !state.current || p.id !== state.current.id) return;
     const pos = audio.currentTime;
@@ -1447,6 +1511,7 @@
     api.onRadioTitle(({ id, title }) => {
       if (!state.radio || state.radio.station.id !== id || title === null) return;
       state.radio.title = title;
+      onRadioSong(title);
       updateNowPlaying();
     });
     api.onRadioError(({ id, message }) => {

@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('discshelf', {
   albumMenu: (ids, title, x, y) => ipcRenderer.invoke('menu:albumContext', { ids, title, x, y }),
 
   saveTracks: (ids, fields, art) => ipcRenderer.invoke('track:save', { ids, fields, art }),
+  pendingEdits: () => ipcRenderer.invoke('library:pendingEdits'),
+  writePendingEdits: () => ipcRenderer.invoke('library:writePending'),
+  onTagProgress: on('tags:progress'),
   saveEach: (entries, art, artIds) => ipcRenderer.invoke('track:saveEach', { entries, art, artIds }),
   albumTracks: (ref, ids) => ipcRenderer.invoke('online:albumTracks', { ref, ids }),
   artistImage: (name) => ipcRenderer.invoke('online:artistImage', name),
@@ -48,6 +51,8 @@ contextBridge.exposeInMainWorld('discshelf', {
   lastfmDisconnect: () => ipcRenderer.invoke('lastfm:disconnect'),
   lastfmSetKeys: (keys) => ipcRenderer.invoke('lastfm:setKeys', keys),
   artistInfo: (name) => ipcRenderer.invoke('lastfm:artistInfo', name),
+  lastfmRadioNowPlaying: (song) => ipcRenderer.invoke('lastfm:radioNowPlaying', song),
+  lastfmRadioScrobble: (song, startedAt) => ipcRenderer.invoke('lastfm:radioScrobble', { song, startedAt }),
   lastfmNowPlaying: (id) => ipcRenderer.invoke('lastfm:nowPlaying', id),
   lastfmScrobble: (id, startedAt) => ipcRenderer.invoke('lastfm:scrobble', { id, startedAt }),
   radioSearch: (q) => ipcRenderer.invoke('radio:search', q),

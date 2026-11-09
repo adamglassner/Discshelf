@@ -57,6 +57,35 @@ const { Library } = require('../src/main/library');
     const p = lib2.markPlayed(flac.id);
     assert.strictEqual(p.playCount, 1);
 
+    // Saving into the files: with it off, edits stay in the library; turning it on saves them later.
+    const { writeTags } = require('../src/main/tags/writer');
+    const { readTags } = require('../src/main/tags');
+    lib2.tagWriter = writeTags;
+    let writeOn = false;
+    lib2.shouldWriteFiles = () => writeOn;
+    const mp3 = lib2.snapshot().tracks.find((x) => x.path.endsWith('cbr-v23.mp3'));
+    const w1 = await lib2.updateTracks([mp3.id], { title: 'Library Only' });
+    assert.strictEqual(w1.written, 0);
+    assert.strictEqual((await readTags(mp3.path)).title, 'Sine_Song', 'file untouched while saving into files is off');
+    assert.strictEqual(lib2.pendingEdits().length, 1);
+    writeOn = true;
+    const w2 = await lib2.writePendingEdits();
+    assert.strictEqual(w2.written, 1);
+    assert.strictEqual((await readTags(mp3.path)).title, 'Library Only', 'earlier edit saved into the file');
+    assert.strictEqual(lib2.pendingEdits().length, 0, 'nothing left pending');
+    const w3 = await lib2.updateEach([{ id: mp3.id, fields: { title: 'Per Song Write', trackNo: 9 } }]);
+    assert.strictEqual(w3.written, 1);
+    const back = await readTags(mp3.path);
+    assert.strictEqual(back.title, 'Per Song Write');
+    assert.strictEqual(back.trackNo, 9);
+    assert.strictEqual(lib2.get(mp3.id).edits, undefined, 'edits cleared once in the file');
+    const rescan = await lib2.scan();
+    assert.strictEqual(rescan.updated, 0, 'rescan sees the file as unchanged');
+    const bad = lib2.snapshot().tracks.find((x) => x.path.endsWith('broken.mp3'));
+    const r4 = await lib2.updateTracks([bad.id], { title: 'Nope' });
+    assert.strictEqual(r4.failed.length, 1, 'a file that can’t be written is reported');
+    assert.strictEqual(lib2.get(bad.id).title, 'Nope', '… but the library keeps the change');
+
     // Removing the folder removes its tracks.
     const gone = lib2.removeFolder(music);
     assert.strictEqual(gone, 9);

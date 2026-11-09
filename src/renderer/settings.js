@@ -96,7 +96,11 @@ window.DSModules.settings = (ctx) => {
 
         <section class="set-card">
           <h2>Song info &amp; artwork</h2>
-          <p class="set-hint">To change a song’s details or artwork yourself, right-click it and choose <b>Get Info</b> (or press Ctrl+I). Changes are kept in your Discshelf library; your music files aren’t changed.</p>
+          <p class="set-hint">To change a song’s details or artwork yourself, right-click it and choose <b>Get Info</b> (or press Ctrl+I).</p>
+          ${toggle('set-writetags', s.writeTags !== false, 'Save changes into the music files', 'Details and artwork you change are written into the files themselves, so other players see them too. Each file is checked after saving, before it replaces the original.')}
+          <div class="set-row" id="set-pending-row" hidden><span class="set-text"><span class="set-label">Earlier changes</span>
+            <span class="set-hint" id="set-pending-status"></span></span>
+            <button type="button" class="btn" id="set-writepending">Save into files</button></div>
           ${toggle('set-online', s.onlineLookup !== false, 'Look up song info and artwork online', 'Uses the iTunes and Deezer search services. Only the search words you send (artist, album or song names) leave your computer.')}
           <div class="set-row"><span class="set-text"><span class="set-label">Find missing album artwork</span>
             <span class="set-hint" id="set-art-status">${artJob ? '' : missing ? `${plural(missing, 'album has', 'albums have')} no artwork.` : 'Every album has artwork.'}</span></span>
@@ -122,6 +126,16 @@ window.DSModules.settings = (ctx) => {
         </section>
       </div>`;
     if (artJob) showArtProgress(artJob);
+    refreshPending();
+  }
+
+  let writing = false;
+  async function refreshPending() {
+    const row = $('#set-pending-row');
+    if (!row || writing) return;
+    const count = state.settings.writeTags === false ? 0 : await api.pendingEdits();
+    row.hidden = !count;
+    if (count) $('#set-pending-status').textContent = `${plural(count, 'song has', 'songs have')} changes saved only in your library. Save them into the files too?`;
   }
 
   function renderLastfm() {
@@ -172,6 +186,23 @@ window.DSModules.settings = (ctx) => {
           if (artJob) { api.cancelFindArt(); break; }
           ctx.findMissingArt();
           break;
+        case 'set-writepending': {
+          writing = true;
+          const btn = $('#set-writepending');
+          btn.disabled = true;
+          try {
+            const r = await api.writePendingEdits();
+            writing = false;
+            await ctx.reloadLibrary();
+            toast(`Saved changes into ${plural(r.written, 'file', 'files')}.`);
+            if (r.failed.length) toast(`${plural(r.failed.length, 'file', 'files')} couldn’t be saved into. First: “${r.failed[0].title}”: ${r.failed[0].message}.`, 'error');
+          } catch (err) {
+            toast(errText(err), 'error');
+          }
+          writing = false;
+          btn.disabled = false;
+          break;
+        }
         case 'lf-connect':
           try { lf = await api.lastfmConnect(); renderLastfm(); } catch (err) { toast(`Couldn’t connect to Last.fm: ${errText(err)}`, 'error'); }
           break;
@@ -193,8 +224,13 @@ window.DSModules.settings = (ctx) => {
       if (id === 'set-resume') ctx.saveSettings({ resumeOnStart: e.target.checked });
       if (id === 'set-online') { ctx.saveSettings({ onlineLookup: e.target.checked }); render(); }
       if (id === 'set-scrobble') ctx.saveSettings({ scrobble: e.target.checked });
+      if (id === 'set-writetags') { ctx.saveSettings({ writeTags: e.target.checked }); refreshPending(); }
     });
 
+    api.onTagProgress((p) => {
+      const el = $('#set-pending-status');
+      if (el && writing) el.textContent = `Saving into files… ${n(p.done)} of ${n(p.total)}`;
+    });
     api.lastfmStatus().then((st) => { lf = st; if (state.view === 'settings') renderLastfm(); });
     api.onLastfmStatus((st) => { lf = st; if (state.view === 'settings') renderLastfm(); });
     api.onLastfmError((msg) => { toast(msg, 'error'); });

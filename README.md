@@ -35,8 +35,8 @@ The builds aren't code-signed yet, so Windows SmartScreen may say it "protected 
 - **Play:** double-click a song or press Enter. Play/pause, next/previous, seek, volume, shuffle, and repeat (all or one song). Your keyboard's media keys work too.
 - **Equalizer:** 10 bands, preamp and presets (button in the player bar, or **Playback → Equalizer**).
 - **Radio:** live stations from around the world (Radio Browser directory): top stations by country, genres, search, and favorites. Shows the song the station is playing.
-- **Get Info** (Ctrl+I, or right-click a song or album): edit song details and artwork yourself, or look them up on iTunes and Deezer. Using an album result also gives each song its title and track number from the album's track list. **File → Find Missing Album Artwork** fills in covers for your whole library. Edits are kept in your Discshelf library; your music files aren't changed.
-- **Last.fm:** connect your account in **Settings** to scrobble what you play.
+- **Get Info** (Ctrl+I, or right-click a song or album): edit song details and artwork yourself, or look them up on iTunes and Deezer. Using an album result also gives each song its title and track number from the album's track list. **File → Find Missing Album Artwork** fills in covers for your whole library. Changes are saved into the music files (MP3, FLAC, M4A, Ogg, Opus, WAV); each file is checked after writing before it replaces the original. You can turn this off in Settings.
+- **Last.fm:** connect your account in **Settings** to scrobble what you play, including songs on the radio when the station says what's playing.
 - **Themes:** **Modern** or **Classic** (Songbird's look), each in light or dark, or following Windows (**Settings → Appearance**).
 
 Apple Lossless (ALAC) files are added to the library, but they can't be played yet.
@@ -77,7 +77,7 @@ Discshelf is an Electron app with no other runtime dependencies. The tag reader 
 | Folder | What's in it |
 |---|---|
 | `src/main/` | Main process: window, menus, the `discshelf://` protocol that streams songs and artwork, library scanning |
-| `src/main/tags/` | Reads tags, duration, format details and cover art from each file type |
+| `src/main/tags/` | Reads tags, duration, format details and cover art from each file type, and writes details and artwork back (`writer.js`) |
 | `src/main/online.js`, `src/main/lastfm.js`, `src/main/radio.js` | iTunes / Deezer lookups, Last.fm sign-in, scrobbling and artist info, the radio directory and stream relay |
 | `src/renderer/` | The window: layout, themes, songs / artists / albums / radio views, Get Info, equalizer, settings, player |
 | `test/` | Tests and small fixture files (`npm test`) |
@@ -102,7 +102,7 @@ The Bytehawk Studio Launcher picks up the new release automatically. Its catalog
 
 ## Coming later
 
-Playlists, a play queue, writing tag edits back to the music files, ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
+Playlists, a play queue, ALAC playback, the Discshelf server, and the mobile and macOS apps. Design mockups for these are in [`design/mockups/`](design/mockups/) ([design canvas](https://claude.ai/artifact/HXFw1C7RiSvCq4xAK6p3ZG)).
 
 ---
 
