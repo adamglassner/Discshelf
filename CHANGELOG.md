@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- **Add a radio station by its address.** Radio → **Add station**: paste a station's web page (for example `i1430.com`) or its stream address, and Discshelf finds the stream, the station's name and logo. Works with Live365 stations, .pls and .m3u playlists, and most station websites with a "Listen live" player. Stations you add go in your favorites; the pencil button renames or removes them.
+
 ## 0.6.0
 
 - **Gapless playback.** The next song is loaded while the current one plays, so albums meant to flow from one track into the next (live albums, DJ mixes, concept albums) play without a gap.

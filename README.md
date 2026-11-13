@@ -42,6 +42,7 @@ The builds aren't code-signed yet, so Windows SmartScreen may say it "protected 
 - **Playlists:** make them in the sidebar (Ctrl+N), drag songs, albums or artists onto them, drag to reorder, and import or export .m3u / .m3u8 files.
 - **Up Next:** right-click and choose **Play Next** or **Add to Up Next**; the Up Next panel (Ctrl+U) shows what's coming and lets you reorder it.
 - **Ratings and Loved:** stars and a heart for each song, saved into the files; loving a song loves it on Last.fm too.
+- **Your own radio stations:** stations that aren't in the directory can be added by pasting their web page or stream address (**Radio → Add station**).
 - **Gapless and crossfade:** songs play back to back with no gap, or fade into each other over 1 to 10 seconds (**Settings → Playback**).
 - **Volume leveling:** every song (or every album) at about the same loudness, from ReplayGain tags or Discshelf's own loudness measurement.
 - **Lyrics:** the Lyrics tab in the art pane (Ctrl+Shift+L) shows lyrics from a .lrc file, the music file or LRCLIB; synced lyrics follow along.

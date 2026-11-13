@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld('discshelf', {
   radioSearch: (q) => ipcRenderer.invoke('radio:search', q),
   radioCountries: () => ipcRenderer.invoke('radio:countries'),
   radioClick: (id) => ipcRenderer.invoke('radio:click', id),
+  radioResolve: (input) => ipcRenderer.invoke('radio:resolve', input),
   radioStop: () => ipcRenderer.invoke('radio:stop'),
   onRadioTitle: on('radio:title'),
   onRadioError: on('radio:error'),

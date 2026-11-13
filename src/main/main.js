@@ -9,7 +9,7 @@ const { AUDIO_EXTENSIONS } = require('./tags');
 const { writeTags } = require('./tags/writer');
 const { Online, sniffImage, matchTracks } = require('./online');
 const { Lastfm } = require('./lastfm');
-const { RadioBrowser, icyStripper, firstPlaylistUrl } = require('./radio');
+const { RadioBrowser, icyStripper, firstPlaylistUrl, resolveStation } = require('./radio');
 const { Lyrics } = require('./lyrics');
 
 const SMOKE_TEST = process.argv.includes('--smoke-test');
@@ -727,7 +727,8 @@ function registerIpc() {
   // ---- radio
   ipcMain.handle('radio:search', (_e, q) => radio.search(q || {}));
   ipcMain.handle('radio:countries', () => radio.countries());
-  ipcMain.handle('radio:click', (_e, id) => { radio.click(id); });
+  ipcMain.handle('radio:click', (_e, id) => { if (!String(id).startsWith('custom:')) radio.click(id); });
+  ipcMain.handle('radio:resolve', (_e, input) => resolveStation(input, (url, opts) => net.fetch(url, opts), userAgent()));
   ipcMain.handle('radio:stop', () => { if (radioStream) { radioStream.abort(); radioStream = null; } });
 
   ipcMain.handle('lastfm:artistInfo', async (_e, name) => {
